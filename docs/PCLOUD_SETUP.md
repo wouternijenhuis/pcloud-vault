@@ -1,6 +1,21 @@
 # Connecting pCloud
 
-The desktop app needs a registered pCloud OAuth application's **public client ID**. It does not need or embed a client secret. Register this exact redirect URI:
+There are two ways to connect. Both keep your pCloud password on pCloud's own page.
+
+## Sign in on the pCloud website (default)
+
+Choose **Sign in on pCloud website**. The app opens pCloud's sign-in page (`https://my.pcloud.com`) in a separate window, where you sign in as you would in a browser, including two-step verification and social sign-in. No developer registration or approval is needed.
+
+How it works and what it means:
+
+- The window is **private**: it keeps no browsing profile on disk and has **no access to the app's commands**. It may only navigate to HTTPS pages.
+- After you sign in, pCloud's website stores its session token in its `pcauth` cookie and your region in `locationid`. The app's Rust code reads these two cookies, clears the window's browsing data, and closes it. The token is verified with `userinfo` (trying the other region once if needed) and then stored only inside the current-user DPAPI account record.
+- The token is a **full account session**, equivalent to being signed in on pCloud's website. **Forget this PC** calls pCloud's `logout` to end that session. You can also end sessions from pCloud's own account settings.
+- This uses pCloud's website behavior rather than a documented developer API, so a pCloud website change can break it. If it does, use a registered OAuth app instead (below).
+
+## Using a registered OAuth application
+
+The desktop app can use a registered pCloud OAuth application's **public client ID** instead. It does not need or embed a client secret. Register this exact redirect URI:
 
 ```text
 http://127.0.0.1:43187/callback
@@ -26,7 +41,7 @@ Live account integration requires pCloud's approval of your application and your
 
 ## Connecting and validating
 
-Configure the client ID in Settings, then choose **Connect pCloud**. The system browser opens pCloud's sign-in and consent page. The account password and two-factor authentication stay on pCloud's page. The app starts its callback listener before opening the browser, accepts one state-bound response, and closes the listener after completion or three minutes.
+For OAuth, expand **Use a registered pCloud app instead** in the connect dialog, enter the client ID, then choose **Continue with OAuth app**. The system browser opens pCloud's sign-in and consent page. The account password and two-factor authentication stay on pCloud's page. The app starts its callback listener before opening the browser, accepts one state-bound response, and closes the listener after completion or three minutes.
 
 The application must be allowed to access your existing account files, not only its application folder. An access-denied response is shown explicitly. A successful empty listing alone does not establish that the application has full account access: verify a known pre-existing file outside the application's private folder, then verify an encrypted upload/download with the real registered application before trusting live sync.
 

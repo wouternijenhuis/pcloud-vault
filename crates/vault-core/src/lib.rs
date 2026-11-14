@@ -731,6 +731,12 @@ impl Vault {
         self.save_local()
     }
     pub fn evict_cache(&mut self) -> Result<u64> {
+        self.evict_cache_protecting(&BTreeSet::new())
+    }
+
+    /// Evicts unpinned, already uploaded chunks down to the cache limit. Chunks of entries in
+    /// `in_use` (or inside in-use folders), such as a file being previewed or exported, are kept.
+    pub fn evict_cache_protecting(&mut self, in_use: &BTreeSet<String>) -> Result<u64> {
         let mut protected = self.local.pending.clone();
         for id in &self.local.pending {
             let manifest_id = match self.store.kinds.get(id).map(String::as_str) {
@@ -746,11 +752,9 @@ impl Vault {
                 protected.extend(manifest.chunks.iter().map(|chunk| chunk.id.clone()));
             }
         }
-        for resolved in self
-            .entries
-            .values()
-            .filter(|resolved| self.is_pinned(&resolved.entry.id))
-        {
+        for resolved in self.entries.values().filter(|resolved| {
+            self.is_pinned(&resolved.entry.id) || self.is_within(&resolved.entry.id, in_use)
+        }) {
             if let Some(id) = &resolved.manifest {
                 let manifest: Manifest = self.store.metadata("manifest", id)?;
                 protected.extend(manifest.chunks.iter().map(|chunk| chunk.id.clone()));
@@ -775,9 +779,14 @@ impl Vault {
     }
 
     pub fn is_pinned(&self, id: &str) -> bool {
+        self.is_within(id, &self.local.pinned)
+    }
+
+    /// True when the entry or one of its ancestor folders is in `set`.
+    fn is_within(&self, id: &str, set: &BTreeSet<String>) -> bool {
         let mut current = Some(id.to_string());
         while let Some(id) = current {
-            if self.local.pinned.contains(&id) {
+            if set.contains(&id) {
                 return true;
             }
             current = self

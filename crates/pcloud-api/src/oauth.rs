@@ -249,6 +249,7 @@ fn parse_fragment(fragment: &str, expected_state: &str) -> Result<Account> {
         region,
         user_id,
         email: String::new(),
+        auth: crate::AuthKind::OAuth,
     })
 }
 

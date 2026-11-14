@@ -90,6 +90,20 @@ impl Region {
             Self::Eu => "eapi.pcloud.com",
         }
     }
+    /// Maps pCloud's web `locationid` (1 = US, 2 = EU) to the matching API region.
+    pub fn from_location_id(location_id: u64) -> Result<Self> {
+        match location_id {
+            1 => Ok(Self::Us),
+            2 => Ok(Self::Eu),
+            _ => Err(Error::InvalidLogin),
+        }
+    }
+    pub fn other(self) -> Self {
+        match self {
+            Self::Us => Self::Eu,
+            Self::Eu => Self::Us,
+        }
+    }
     pub fn from_oauth(location_id: u64, host: &str) -> Result<Self> {
         match (location_id, host) {
             (1, "api.pcloud.com") => Ok(Self::Us),
@@ -99,6 +113,17 @@ impl Region {
     }
 }
 
+/// How the account token was obtained, which decides the API parameter that carries it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AuthKind {
+    /// OAuth 2.0 bearer token from a registered pCloud app (`access_token`).
+    #[default]
+    OAuth,
+    /// Session token from signing in on pCloud's own website (`auth`).
+    WebSession,
+}
+
 /// Serialize only inside the DPAPI protected account record, never plain JSON files.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Account {
@@ -106,6 +131,17 @@ pub struct Account {
     pub region: Region,
     pub user_id: u64,
     pub email: String,
+    #[serde(default)]
+    pub auth: AuthKind,
+}
+
+impl Account {
+    fn token_parameter(&self) -> &'static str {
+        match self.auth {
+            AuthKind::OAuth => "access_token",
+            AuthKind::WebSession => "auth",
+        }
+    }
 }
 
 impl fmt::Debug for Account {
@@ -151,6 +187,9 @@ pub struct DiffEvent {
     pub time: u64,
     pub metadata: Option<Metadata>,
 }
+
+/// Maximum number of events requested per change-feed page.
+pub const DIFF_PAGE_SIZE: usize = 1000;
 
 #[derive(Debug, Clone)]
 pub struct DiffBatch {
@@ -205,11 +244,12 @@ impl Client {
 
     fn call(&self, method: &str, parameters: &[(&str, String)]) -> Result<Value> {
         let mut form = parameters.to_vec();
-        form.push(("access_token", self.account.token.clone()));
+        let token_parameter = self.account.token_parameter();
+        form.push((token_parameter, self.account.token.clone()));
         form.push(("timeformat", "timestamp".into()));
         let result = self.http.post(self.endpoint(method)).form(&form).send();
         for (key, value) in &mut form {
-            if *key == "access_token" {
+            if *key == token_parameter {
                 value.zeroize();
             }
         }
@@ -311,6 +351,44 @@ impl Client {
         )?;
         parse_metadata(value.get("metadata").ok_or(Error::InvalidResponse)?)
     }
+    /// Verifies a website session token and fills in the account identity. The `locationid`
+    /// cookie normally names the region; the other region is tried once if it was wrong.
+    pub fn from_web_session(token: &str, location_id: Option<u64>) -> Result<Self> {
+        let region = location_id
+            .map(Region::from_location_id)
+            .transpose()?
+            .unwrap_or(Region::Us);
+        let mut last = Error::Authentication;
+        for region in [region, region.other()] {
+            let client = Self::new(Account {
+                token: token.to_owned(),
+                region,
+                user_id: 0,
+                email: String::new(),
+                auth: AuthKind::WebSession,
+            })?;
+            match client.user_info() {
+                Ok(info) => {
+                    let mut account = client.account.clone();
+                    account.user_id = info.user_id;
+                    account.email = info.email;
+                    return Ok(Self { account, ..client });
+                }
+                Err(error) => last = error,
+            }
+        }
+        Err(last)
+    }
+
+    /// Invalidates a website session token at pCloud. OAuth tokens are left to the user's
+    /// pCloud app settings.
+    pub fn logout(&self) -> Result<()> {
+        if self.account.auth == AuthKind::WebSession {
+            self.call("logout", &[])?;
+        }
+        Ok(())
+    }
+
     pub fn delete_file(&self, id: u64) -> Result<()> {
         self.call("deletefile", &[("fileid", id.to_string())])
             .map(|_| ())
@@ -364,7 +442,7 @@ impl Client {
             .mime_str("application/octet-stream")
             .map_err(|_| Error::InvalidName)?;
         let form = multipart::Form::new()
-            .text("access_token", self.account.token.clone())
+            .text(self.account.token_parameter(), self.account.token.clone())
             .text("timeformat", "timestamp")
             .text("folderid", parent.to_string())
             .text("nopartial", "1")
@@ -466,8 +544,10 @@ impl Client {
         io::copy(&mut response, writer).map_err(|_| Error::Io)
     }
 
+    /// Returns up to [`DIFF_PAGE_SIZE`] events after `cursor`, or only the current position
+    /// (no events) when `cursor` is `None`.
     pub fn diff(&self, cursor: Option<u64>, block: bool) -> Result<DiffBatch> {
-        let mut parameters = vec![("limit", "1000".into())];
+        let mut parameters = vec![("limit", DIFF_PAGE_SIZE.to_string())];
         if let Some(cursor) = cursor {
             parameters.push(("diffid", cursor.to_string()));
             if block {
@@ -669,6 +749,7 @@ mod tests {
             region: Region::Eu,
             user_id: 1,
             email: "secret@example.com".into(),
+            auth: AuthKind::OAuth,
         };
         assert!(!format!("{account:?}").contains("SECRET_TOKEN"));
     }
@@ -702,6 +783,26 @@ mod tests {
     }
 
     #[test]
+    fn website_sessions_send_the_auth_parameter_and_can_log_out() {
+        let (client, request) = mock_client_as(
+            json!({"result":0,"userid":5,"email":"user@example.com","quota":10,"usedquota":1})
+                .to_string(),
+            AuthKind::WebSession,
+        );
+        assert_eq!(client.user_info().unwrap().user_id, 5);
+        let text = String::from_utf8(request.join().unwrap()).unwrap();
+        assert!(text.contains("auth=test-secret-token"));
+        assert!(!text.contains("access_token"));
+        let (client, request) =
+            mock_client_as(json!({"result":0}).to_string(), AuthKind::WebSession);
+        client.logout().unwrap();
+        let text = String::from_utf8(request.join().unwrap()).unwrap();
+        assert!(text.starts_with("POST /logout HTTP/1.1"));
+        assert_eq!(Region::from_location_id(2).unwrap(), Region::Eu);
+        assert!(Region::from_location_id(3).is_err());
+    }
+
+    #[test]
     fn stat_routes_folder_and_file_ids_without_query_credentials() {
         let (client,request) = mock_client(json!({"result":0,"metadata":{"isfolder":true,"folderid":7,"name":"folder","parentfolderid":1}}).to_string());
         assert_eq!(client.stat(7, true).unwrap().parent_folder_id, 1);
@@ -717,6 +818,13 @@ mod tests {
     }
 
     fn mock_client(response: String) -> (Client, std::thread::JoinHandle<Vec<u8>>) {
+        mock_client_as(response, AuthKind::OAuth)
+    }
+
+    fn mock_client_as(
+        response: String,
+        auth: AuthKind,
+    ) -> (Client, std::thread::JoinHandle<Vec<u8>>) {
         use std::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -756,6 +864,7 @@ mod tests {
             region: Region::Eu,
             user_id: 1,
             email: "test@example.invalid".into(),
+            auth,
         };
         (
             Client {

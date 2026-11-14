@@ -6,7 +6,7 @@
   "permissions": [
     "core:event:default", "core:window:allow-show", "core:window:allow-set-focus",
     "allow-status", "allow-list-entries", "allow-create-vault", "allow-unlock-vault",
-    "allow-lock-vault", "allow-forget-device", "allow-connect-pcloud", "allow-save-settings",
+    "allow-lock-vault", "allow-forget-device", "allow-connect-pcloud", "allow-connect-pcloud-web", "allow-save-settings",
     "allow-new-folder", "allow-rename-entry",
     "allow-move-entry", "allow-trash-entry", "allow-restore-entry", "allow-toggle-favorite",
     "allow-toggle-pin", "allow-import-files", "allow-import-paths", "allow-import-cloud-file",

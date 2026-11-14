@@ -809,3 +809,25 @@ fn tampered_chunks_are_rejected_before_they_are_stored() {
     b.ingest_objects(vec![genuine]).unwrap();
     assert_eq!(contents(&b, &file.id), b"chunk payload");
 }
+
+#[test]
+fn chunks_of_in_use_entries_and_folders_are_not_evicted() {
+    let (_directory, mut vault) = fixture();
+    let folder = vault.create_folder(None, "Exports").unwrap();
+    let file = vault
+        .import_file(
+            Some(&folder.id),
+            "busy.dat",
+            Cursor::new(vec![7_u8; CHUNK_SIZE * 2]),
+        )
+        .unwrap();
+    let pending = vault.pending_object_ids();
+    vault.acknowledge_objects(&pending).unwrap();
+    vault.set_cache_limit_bytes(CHUNK_SIZE as u64).unwrap();
+    let file_in_use = BTreeSet::from([file.id.clone()]);
+    assert_eq!(vault.evict_cache_protecting(&file_in_use).unwrap(), 0);
+    let folder_in_use = BTreeSet::from([folder.id.clone()]);
+    assert_eq!(vault.evict_cache_protecting(&folder_in_use).unwrap(), 0);
+    assert_eq!(contents(&vault, &file.id), vec![7_u8; CHUNK_SIZE * 2]);
+    assert!(vault.evict_cache_protecting(&BTreeSet::new()).unwrap() > 0);
+}

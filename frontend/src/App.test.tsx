@@ -116,6 +116,19 @@ describe('pCloud Vault interface', () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('Trusted PCs')
   })
 
+  it('signs in on the pCloud website without needing an OAuth client ID', async () => {
+    useNativeBridge()
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('Use a registered pCloud app instead')
+    fireEvent.click(within(dialog).getByRole('button', { name: /Sign in on pCloud website/ }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('connect_pcloud_web', {}))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(invoke).not.toHaveBeenCalledWith('connect_pcloud', expect.anything())
+  })
+
   it('requires twelve characters when creating a vault', async () => {
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))

@@ -33,7 +33,9 @@ pub(crate) struct Settings {
     pub client_id: String,
     pub remote_folder: Option<u64>,
     pub remote_objects: Option<u64>,
-    pub diff_cursor: Option<u64>,
+    /// pCloud change-feed position for incremental object discovery. Renamed from the
+    /// former `diffCursor`, so the first sync after upgrading does a full listing.
+    pub object_cursor: Option<u64>,
     pub last_sync: Option<u64>,
     /// Salts of password wrappers this PC has superseded; never adopted again.
     pub retired_header_salts: Vec<String>,
@@ -45,7 +47,7 @@ impl Default for Settings {
             client_id: String::new(),
             remote_folder: None,
             remote_objects: None,
-            diff_cursor: None,
+            object_cursor: None,
             last_sync: None,
             retired_header_salts: Vec::new(),
         }
@@ -84,6 +86,8 @@ pub(crate) struct Inner {
     pub settings: Mutex<Settings>,
     pub activity: Mutex<VecDeque<Activity>>,
     pub syncing: AtomicBool,
+    /// Vault entries currently being read; their chunks are protected from eviction.
+    pub in_use: Mutex<std::collections::HashMap<String, usize>>,
 }
 #[derive(Clone)]
 pub struct AppState(pub(crate) Arc<Inner>);
@@ -316,6 +320,10 @@ async fn lock_vault(state: State<'_, AppState>) -> AppResult<AppStatus> {
 #[tauri::command]
 async fn forget_device(state: State<'_, AppState>) -> AppResult<AppStatus> {
     task(&state, |s| {
+        // A website session token stays valid until it is logged out; end it at pCloud too.
+        if let Some(account) = locked(&s.account)?.clone() {
+            end_web_session(&s, account);
+        }
         for name in ["device.key", "account.key"] {
             let path = s.directory.join(name);
             if path.exists() {
@@ -338,19 +346,126 @@ async fn forget_device(state: State<'_, AppState>) -> AppResult<AppStatus> {
 async fn connect_pcloud(state: State<'_, AppState>, client_id: String) -> AppResult<AppStatus> {
     task(&state, move |s| {
         let account = pcloud_api::oauth::login(client_id.trim()).map_err(|e| e.to_string())?;
-        if let Some(previous) = locked(&s.account)?.as_ref() {
-            if previous.user_id != account.user_id { return Err("Forget this PC before switching pCloud accounts. The local vault will be preserved.".into()); }
-        }
-        let bytes = Zeroizing::new(serde_json::to_vec(&account).map_err(|e| e.to_string())?);
-        atomic_write(&s.directory.join("account.key"), &pcloud_api::dpapi::protect(&bytes).map_err(|e| e.to_string())?)?;
-        *locked(&s.account)? = Some(account);
         locked(&s.settings)?.client_id = client_id;
-        replication::discover(&s)?;
-        s.save_settings()?;
-        if locked(&s.vault)?.is_some() { replication::sync(&s)?; }
-        s.log("pCloud connected securely.", "success");
-        s.status()
-    }).await
+        finish_connect(&s, account)
+    })
+    .await
+}
+
+const WEB_LOGIN_LABEL: &str = "pcloud-login";
+const WEB_LOGIN_URL: &str = "https://my.pcloud.com/#page=login";
+const WEB_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Signs in on pCloud's own website, shown in a separate window, without a registered OAuth
+/// app. The window is private (no stored browsing profile) and has no access to this app's
+/// commands; once pCloud sets its session cookie, Rust reads it and closes the window.
+#[tauri::command]
+async fn connect_pcloud_web(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<AppStatus> {
+    task(&state, move |s| {
+        if let Some(window) = app.get_webview_window(WEB_LOGIN_LABEL) {
+            let _ = window.set_focus();
+            return Err("The pCloud sign-in window is already open.".into());
+        }
+        let url = tauri::Url::parse(WEB_LOGIN_URL).map_err(|e| e.to_string())?;
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            WEB_LOGIN_LABEL,
+            tauri::WebviewUrl::External(url.clone()),
+        )
+        .title("Sign in to pCloud")
+        .inner_size(480.0, 720.0)
+        .center()
+        .incognito(true)
+        .on_navigation(|target| target.scheme() == "https")
+        .build()
+        .map_err(|e| e.to_string())?;
+        let started = std::time::Instant::now();
+        // A token that failed verification (for example one set midway through two-step
+        // sign-in) is not retried; keep polling until pCloud issues a working one.
+        let mut rejected: Option<Zeroizing<String>> = None;
+        let client = loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if app.get_webview_window(WEB_LOGIN_LABEL).is_none() {
+                return Err("pCloud sign-in was cancelled.".into());
+            }
+            if started.elapsed() > WEB_LOGIN_TIMEOUT {
+                let _ = window.close();
+                return Err("pCloud sign-in timed out. Try again.".into());
+            }
+            let Ok(cookies) = window.cookies_for_url(url.clone()) else {
+                continue;
+            };
+            let token = cookies
+                .iter()
+                .find(|c| c.name() == "pcauth" && !c.value().is_empty())
+                .map(|c| Zeroizing::new(c.value().to_string()));
+            let location = cookies
+                .iter()
+                .find(|c| c.name() == "locationid")
+                .and_then(|c| c.value().parse::<u64>().ok());
+            drop(cookies);
+            let Some(token) = token else { continue };
+            if rejected.as_deref() == Some(&*token) {
+                continue;
+            }
+            match Client::from_web_session(&token, location) {
+                Ok(client) => break client,
+                Err(_) => rejected = Some(token),
+            }
+        };
+        let _ = window.clear_all_browsing_data();
+        let _ = window.close();
+        finish_connect(&s, client.account().clone())
+    })
+    .await
+}
+
+/// Logs a website session out at pCloud (OAuth tokens are left alone) and reports failures,
+/// since an unended session keeps full account access.
+fn end_web_session(s: &Inner, account: Account) {
+    if account.auth != pcloud_api::AuthKind::WebSession {
+        return;
+    }
+    if Client::new(account)
+        .and_then(|client| client.logout())
+        .is_err()
+    {
+        s.log(
+            "Could not end a pCloud website session. You can end it in pCloud's account settings.",
+            "error",
+        );
+    }
+}
+
+/// Saves a verified account with DPAPI and connects the remote vault.
+fn finish_connect(s: &Arc<Inner>, account: pcloud_api::Account) -> AppResult<AppStatus> {
+    let previous = locked(&s.account)?.clone();
+    if let Some(previous) = &previous {
+        if previous.user_id != account.user_id {
+            end_web_session(s, account);
+            return Err("Forget this PC before switching pCloud accounts. The local vault will be preserved.".into());
+        }
+    }
+    let bytes = Zeroizing::new(serde_json::to_vec(&account).map_err(|e| e.to_string())?);
+    atomic_write(
+        &s.directory.join("account.key"),
+        &pcloud_api::dpapi::protect(&bytes).map_err(|e| e.to_string())?,
+    )?;
+    let replaced = previous.filter(|previous| previous.token != account.token);
+    *locked(&s.account)? = Some(account);
+    if let Some(replaced) = replaced {
+        end_web_session(s, replaced);
+    }
+    replication::discover(s)?;
+    s.save_settings()?;
+    if locked(&s.vault)?.is_some() {
+        replication::sync(s)?;
+    }
+    s.log("pCloud connected securely.", "success");
+    s.status()
 }
 
 #[tauri::command]
@@ -668,9 +783,12 @@ async fn toggle_pin(state: State<'_, AppState>, id: String) -> AppResult<()> {
             .entry(&id)
             .map_err(|e| e.to_string())?
             .pinned;
-        if !pinned {
-            replication::ensure_file(&s, &id)?;
-        }
+        // Keep the hydrated chunks protected until the pin is recorded.
+        let _in_use = if pinned {
+            None
+        } else {
+            Some(replication::ensure_file(&s, &id)?)
+        };
         let mut vault = locked(&s.vault)?;
         let vault = vault.as_mut().ok_or("Unlock your vault first")?;
         let entry = vault.entry(&id).map_err(|e| e.to_string())?;
@@ -760,7 +878,7 @@ fn outside_storage(s: &Inner, path: &Path) -> AppResult<()> {
 }
 
 fn choose_vault_export(s: &Arc<Inner>, id: &str) -> AppResult<Option<PathBuf>> {
-    replication::ensure_file(s, id)?;
+    let _in_use = replication::ensure_file(s, id)?;
     let entry = locked(&s.vault)?
         .as_ref()
         .ok_or("Unlock your vault first")?
@@ -946,7 +1064,7 @@ async fn preview_entry(
         const MAX: u64 = 20 * 1024 * 1024;
         let mut bytes = Zeroizing::new(Vec::new());
         if location == "vault" {
-            replication::ensure_file(&s, &id)?;
+            let _in_use = replication::ensure_file(&s, &id)?;
             let vault = locked(&s.vault)?;
             let vault = vault.as_ref().ok_or("Unlock your vault first")?;
             let entry = vault.entry(&id).map_err(|e| e.to_string())?;
@@ -1124,6 +1242,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 activity: Mutex::new(VecDeque::new()),
                 syncing: AtomicBool::new(false),
+                in_use: Mutex::default(),
             });
             if let Ok(blob) = fs::read(inner.directory.join("device.key")) {
                 if let Ok(bytes) = pcloud_api::dpapi::unprotect(&blob) {
@@ -1203,6 +1322,7 @@ pub fn run() {
             lock_vault,
             forget_device,
             connect_pcloud,
+            connect_pcloud_web,
             save_settings,
             new_folder,
             rename_entry,
@@ -1238,6 +1358,7 @@ mod tests {
             settings: Mutex::new(Settings::default()),
             activity: Mutex::new(VecDeque::new()),
             syncing: AtomicBool::new(false),
+            in_use: Mutex::default(),
         });
         *inner.vault.lock().unwrap() =
             Some(Vault::create(&inner.vault_path(), "test-only-long-passphrase").unwrap());

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   Activity as ActivityIcon, ArrowDownToLine, ArrowLeft, ArrowRight, Check, ChevronRight, Cloud,
-  File, FileImage, FileText, Folder, FolderPlus, Grid2X2, HardDrive, Home, Image,
+  File, FileImage, FileText, Folder, FolderPlus, Globe, Grid2X2, HardDrive, Home, Image,
   LayoutList, LockKeyhole, Moon, Plus, RefreshCw, Search, Settings as SettingsIcon,
   ShieldCheck, Star, Sun, Trash2, Upload, Wifi, X,
 } from 'lucide-react'
@@ -102,7 +102,7 @@ export default function App() {
 
   const announce = (message: string) => { setToast(message); window.setTimeout(() => setToast(''), 2800) }
   const perform = async (command: keyof ActionArguments, args: ActionArguments[keyof ActionArguments] = {} as ActionArguments[keyof ActionArguments], success?: string) => {
-    if (busy) return
+    if (busy) return false
     setBusy(true); setError('')
     try {
       const result = await runAction(command, args)
@@ -112,8 +112,9 @@ export default function App() {
       if (command !== 'lock_vault' && command !== 'forget_device') await refreshEntries()
       if (success) announce(success)
       setSelected([])
+      return true
     }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'That action could not be completed.') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'That action could not be completed.'); return false }
     finally { setBusy(false) }
   }
   const folder = path.at(-1) ?? null
@@ -155,6 +156,10 @@ export default function App() {
     if (modal === 'password') await perform('change_password', { oldPassword: formName, newPassword: password }, 'Password changed')
     if (modal === 'connect') await perform('connect_pcloud', { clientId: settings.clientId }, 'pCloud connected')
     setPassword(''); setFormName(''); setModal(null)
+  }
+  const connectWeb = async () => {
+    if (!desktop) { announce('Website sign-in is available in the Windows app'); return }
+    if (await perform('connect_pcloud_web', {}, 'pCloud connected')) setModal(null)
   }
   const modalClose = useCallback(() => { if (!busy) setModal(null) }, [busy])
   const moveNavigation = (item: View) => { entriesRequest.current++; setView(item); if (item === 'favorites' || item === 'offline' || item === 'trash') setLocation('vault'); setParentId(null); setPath([]); setEntries([]); setSelected([]); if (item !== 'settings') setQuery('') }
@@ -207,7 +212,7 @@ export default function App() {
     {modal === 'create' && <Dialog title="Create your private vault" description="Choose a strong password with at least 12 characters. Files in your vault stay encrypted on this PC." onClose={modalClose} onSubmit={onSubmit} submitLabel="Create vault" busy={busy}><label className="field-label">Vault password<input required type="password" minLength={12} value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" placeholder="At least 12 characters" /></label><label className="check-label"><input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />Remember this PC so you can unlock faster</label></Dialog>}
     {modal === 'unlock' && <Dialog title="Unlock your vault" description="Enter your vault password to continue." onClose={modalClose} onSubmit={onSubmit} submitLabel="Unlock vault" busy={busy}><label className="field-label">Vault password<input required type="password" minLength={12} value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" /></label><label className="check-label"><input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />Remember this PC</label></Dialog>}
     {modal === 'password' && <Dialog title="Change vault password" description="This wraps your existing vault key with the new password; it does not re-encrypt every file. Trusted PCs that already remember this vault keep their key." onClose={modalClose} onSubmit={onSubmit} submitLabel="Update password" busy={busy}><label className="field-label">Current password<input required type="password" minLength={12} value={formName} onChange={e => setFormName(e.target.value)} /></label><label className="field-label">New password<input required type="password" minLength={12} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 12 characters" /></label></Dialog>}
-    {modal === 'connect' && <Dialog title="Connect to pCloud" description="Your browser will open so you can sign in securely. Your password is never shared with this app." onClose={modalClose} onSubmit={onSubmit} submitLabel="Continue to pCloud" busy={busy}><label className="field-label">OAuth client ID<input required value={settings.clientId} onChange={e => setSettings({ ...settings, clientId: e.target.value })} placeholder="Paste your pCloud app client ID" /></label><p className="privacy-note"><ShieldCheck size={15} /> Register a pCloud app with full account access and callback URL <code>http://127.0.0.1:43187/callback</code>. Sign-in happens with pCloud; this app only receives an access token.</p></Dialog>}
+    {modal === 'connect' && <Dialog title="Connect to pCloud" description="Sign in on pCloud's own website. Your password and two-step verification stay on pCloud's page." onClose={modalClose} onSubmit={onSubmit} busy={busy}><button type="button" className="button button-primary connect-web" onClick={() => void connectWeb()} disabled={busy}><Globe size={15} /> {busy ? 'Waiting for pCloud sign-in…' : 'Sign in on pCloud website'}</button><p className="privacy-note"><ShieldCheck size={15} /> A separate private window opens pCloud's sign-in page. This app keeps only the resulting session token, protected by Windows, and ends that session when you forget this PC.</p><details className="connect-alternative"><summary>Use a registered pCloud app instead</summary><label className="field-label">OAuth client ID<input required value={settings.clientId} onChange={e => setSettings({ ...settings, clientId: e.target.value })} placeholder="Paste your pCloud app client ID" /></label><p className="privacy-note"><ShieldCheck size={15} /> Register a pCloud app with full account access and callback URL <code>http://127.0.0.1:43187/callback</code>. Your browser opens pCloud's sign-in; this app only receives an access token.</p><button type="submit" className="button button-subtle" disabled={busy}>Continue with OAuth app</button></details></Dialog>}
     {modal === 'preview' && activeEntry && <Dialog title={activeEntry.name} description={`${formatSize(activeEntry.size)} · ${timeLabel(activeEntry.modified)}`} onClose={modalClose}><div className="preview-area">{preview ? <img src={preview} alt={activeEntry.name} /> : <div className="preview-placeholder"><FileImage size={38} /><span>Preview is available in the desktop app.</span></div>}</div><p className="export-warning">Exported copies are decrypted and saved outside your managed vault.</p><div className="preview-actions"><button className="button button-subtle" onClick={() => void exportEntry(activeEntry)}><ArrowDownToLine size={16} /> Export copy</button><button className="button button-primary" onClick={() => desktop ? void perform('open_entry', { location, id: activeEntry.id }, 'Exported copy opened') : announce('Export and open is available in the Windows app')}><ArrowRight size={16} /> Export and open</button></div></Dialog>}
     {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
   </div>

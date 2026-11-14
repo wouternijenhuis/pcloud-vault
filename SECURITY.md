@@ -12,6 +12,7 @@ pCloud Vault uses a new, **unaudited** vault protocol built on established primi
 
 - Cloud storage receives only encrypted vault objects, but the provider can still observe object sizes, counts, and access timing.
 - Files under **pCloud Files** are ordinary, unencrypted account files.
+- The pCloud sign-in token (an OAuth token, or a full website session token when you use website sign-in) is protected with current-user Windows DPAPI. Anyone who can run code as your Windows user can use it. Forgetting the PC logs a website session out at pCloud.
 - An unlocked vault on a trusted Windows session is accessible to that user's processes. Exported or opened decrypted copies, malware, and operating-system paging are outside the protection boundary.
 - A password change rewraps the vault key. It does not revoke previously trusted PCs or older wrapped keys kept in cloud history.
 

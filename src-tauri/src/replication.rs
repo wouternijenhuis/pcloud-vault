@@ -93,6 +93,10 @@ pub(crate) fn discover(s: &Arc<Inner>) -> AppResult<()> {
     }
     {
         let mut settings = locked(&s.settings)?;
+        if settings.remote_objects != Some(objects.id) {
+            // A different objects folder needs a full listing, not the old feed position.
+            settings.object_cursor = None;
+        }
         settings.remote_folder = Some(root.id);
         settings.remote_objects = Some(objects.id);
     }
@@ -184,11 +188,11 @@ fn remote_objects(s: &Inner, client: &Client) -> AppResult<Vec<Metadata>> {
 /// Ingests a batch; if it is rejected, retries each object alone so one invalid object
 /// (from a buggy or incompatible client) cannot stop every later sync. Skipped objects are
 /// retried on the next sync, when their dependencies may have arrived.
-fn ingest_tolerantly(s: &Inner, objects: Vec<ReplicationObject>) -> AppResult<()> {
+fn ingest_tolerantly(s: &Inner, objects: Vec<ReplicationObject>) -> AppResult<usize> {
     let mut guard = locked(&s.vault)?;
     let vault = guard.as_mut().ok_or("Vault locked")?;
     if vault.ingest_objects(objects.clone()).is_ok() {
-        return Ok(());
+        return Ok(0);
     }
     let skipped = objects
         .into_iter()
@@ -201,7 +205,68 @@ fn ingest_tolerantly(s: &Inner, objects: Vec<ReplicationObject>) -> AppResult<()
             "info",
         );
     }
+    Ok(skipped)
+}
+
+/// Lists every vault object. The feed position is taken first, so changes made during the
+/// listing are replayed by the next incremental sync (objects are immutable, so replays are
+/// harmless).
+fn full_listing(s: &Inner, client: &Client) -> AppResult<(Vec<Metadata>, Option<u64>)> {
+    let cursor = client.diff(None, false).ok().map(|batch| batch.cursor);
+    Ok((remote_objects(s, client)?, cursor))
+}
+
+/// Folds change-feed events into the current set of candidate objects, keyed by name.
+fn apply_feed_events(
+    found: &mut std::collections::BTreeMap<String, Metadata>,
+    events: Vec<pcloud_api::DiffEvent>,
+    folder_id: u64,
+) -> AppResult<()> {
+    for event in events {
+        match event.event.as_str() {
+            // pCloud asks clients to rebuild their state; reconcile the full listing.
+            "reset" => return Err("The change feed was reset.".into()),
+            "createfile" | "modifyfile" | "deletefile" => {}
+            _ => continue,
+        }
+        let Some(metadata) = event.metadata else {
+            continue;
+        };
+        // Later events win: an object deleted or moved out of the folder after it was
+        // created is no longer a candidate.
+        found.remove(&metadata.name);
+        if event.event != "deletefile"
+            && !metadata.is_folder
+            && metadata.parent_folder_id == folder_id
+            && object_identity(&metadata.name).is_ok()
+        {
+            found.insert(metadata.name.clone(), metadata);
+        }
+    }
     Ok(())
+}
+
+/// Collects vault objects created since `cursor` from pCloud's change feed.
+fn changed_objects(
+    client: &Client,
+    cursor: u64,
+    folder_id: u64,
+) -> AppResult<(Vec<Metadata>, Option<u64>)> {
+    const MAX_PAGES: usize = 50;
+    let mut position = cursor;
+    let mut found = std::collections::BTreeMap::new();
+    for _ in 0..MAX_PAGES {
+        let batch = client
+            .diff(Some(position), false)
+            .map_err(|e| e.to_string())?;
+        let complete = batch.events.len() < pcloud_api::DIFF_PAGE_SIZE;
+        apply_feed_events(&mut found, batch.events, folder_id)?;
+        position = batch.cursor;
+        if complete {
+            return Ok((found.into_values().collect(), Some(position)));
+        }
+    }
+    Err("The change backlog is large; reconciling the full listing instead.".into())
 }
 
 pub(crate) struct SyncGuard<'a>(&'a Inner);
@@ -247,7 +312,7 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
             settings
                 .remote_objects
                 .ok_or("Missing remote objects folder")?,
-            settings.diff_cursor,
+            settings.object_cursor,
             settings.last_sync,
         )
     };
@@ -307,15 +372,16 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
     }
     let obsolete =
         last_sync.is_none_or(|last| now().saturating_sub(last) > 150 * 24 * 60 * 60 * 1000);
-    // The authoritative object listing below drives reconciliation. A rejected or expired
-    // cursor falls back to a fresh feed position instead of blocking sync.
-    let batch = client
-        .diff(if obsolete { None } else { cursor }, false)
-        .or_else(|_| client.diff(None, false))
-        .ok();
-    // Reconcile the authoritative object listing after feed inspection. Names are opaque;
-    // metadata authentication and causality are checked by the core before exposure.
-    let remote = remote_objects(s, &client)?;
+    // Incremental discovery replays pCloud's change feed from the saved cursor and only
+    // considers objects created in the vault folder. First connection, an obsolete or
+    // rejected cursor, or an oversized backlog fall back to a full listing.
+    let (candidates, next_cursor) = match cursor.filter(|_| !obsolete) {
+        Some(cursor) => match changed_objects(&client, cursor, folder_id) {
+            Ok(found) => found,
+            Err(_) => full_listing(s, &client)?,
+        },
+        None => full_listing(s, &client)?,
+    };
     let known: HashSet<_> = {
         let vault = locked(&s.vault)?;
         vault
@@ -326,29 +392,29 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
             .map(|(id, kind)| object_name(&id, &kind))
             .collect::<AppResult<_>>()?
     };
+    // Objects that fail validation keep the cursor in place, so they are retried next sync.
+    let mut skipped = 0;
     let mut incoming = Vec::new();
-    for entry in remote
-        .iter()
-        .filter(|m| !m.is_folder && m.name.ends_with(".obj") && !known.contains(&m.name))
-    {
+    for entry in candidates.iter().filter(|m| !known.contains(&m.name)) {
+        // Metadata and causal history only; chunks are fetched on demand so the client
+        // never holds a whole account's file contents.
         if object_identity(&entry.name)?.1 == "chunk" {
             continue;
         }
-        let Ok(object) = decode(&entry.name, download(&client, entry.id, MAX_METADATA)?) else {
+        let Ok(object) =
+            download(&client, entry.id, MAX_METADATA).and_then(|bytes| decode(&entry.name, bytes))
+        else {
             s.log("Skipped an unreadable encrypted object in pCloud.", "info");
+            skipped += 1;
             continue;
         };
-        // Keep metadata and causal history; chunks are fetched on demand. Avoid
-        // retaining a whole account's file contents in the client's memory.
-        if object.kind != "chunk" {
-            incoming.push(object);
-        }
+        incoming.push(object);
         if incoming.len() >= 128 {
-            ingest_tolerantly(s, std::mem::take(&mut incoming))?;
+            skipped += ingest_tolerantly(s, std::mem::take(&mut incoming))?;
         }
     }
     if !incoming.is_empty() {
-        ingest_tolerantly(s, incoming)?;
+        skipped += ingest_tolerantly(s, incoming)?;
     }
     let pending = {
         let vault = locked(&s.vault)?;
@@ -371,9 +437,9 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
     }
     {
         let mut settings = locked(&s.settings)?;
-        if let Some(batch) = batch {
-            settings.diff_cursor = Some(batch.cursor);
-        }
+        // Skipped objects (invalid, or not downloadable right now) are retried by a full
+        // listing on the next sync rather than replaying an ever-growing feed backlog.
+        settings.object_cursor = if skipped == 0 { next_cursor } else { None };
         settings.last_sync = Some(now());
     }
     s.save_settings()?;
@@ -398,7 +464,11 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
         vault
             .set_cache_limit_bytes(locked(&s.settings)?.cache_limit_gib * 1024 * 1024 * 1024)
             .map_err(|e| e.to_string())?;
-        vault.evict_cache().map_err(|e| e.to_string())?;
+        let in_use: std::collections::BTreeSet<String> =
+            locked(&s.in_use)?.keys().cloned().collect();
+        vault
+            .evict_cache_protecting(&in_use)
+            .map_err(|e| e.to_string())?;
     }
     if !pending.is_empty() {
         s.log(
@@ -409,7 +479,40 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
     Ok(())
 }
 
-pub(crate) fn ensure_file(s: &Arc<Inner>, id: &str) -> AppResult<()> {
+/// Marks a vault entry as being read so cache eviction keeps its chunks. Hold it until the
+/// read, preview or export that needed the hydrated data has finished.
+pub(crate) struct InUse {
+    inner: Arc<Inner>,
+    id: String,
+}
+impl InUse {
+    pub fn acquire(inner: &Arc<Inner>, id: &str) -> AppResult<Self> {
+        *locked(&inner.in_use)?.entry(id.to_string()).or_insert(0) += 1;
+        Ok(Self {
+            inner: inner.clone(),
+            id: id.to_string(),
+        })
+    }
+}
+impl Drop for InUse {
+    fn drop(&mut self) {
+        if let Ok(mut in_use) = self.inner.in_use.lock() {
+            if let Some(count) = in_use.get_mut(&self.id) {
+                *count -= 1;
+                if *count == 0 {
+                    in_use.remove(&self.id);
+                }
+            }
+        }
+    }
+}
+
+/// Downloads any missing encrypted objects for a file or folder. The returned guard keeps
+/// them from being evicted while the caller reads them.
+pub(crate) fn ensure_file(s: &Arc<Inner>, id: &str) -> AppResult<InUse> {
+    // Register before checking what is missing: eviction takes the vault lock before
+    // reading this registry, so it either sees this entry or runs before the check.
+    let in_use = InUse::acquire(s, id)?;
     let missing = {
         let vault = locked(&s.vault)?;
         let vault = vault.as_ref().ok_or("Unlock your vault first")?;
@@ -453,7 +556,7 @@ pub(crate) fn ensure_file(s: &Arc<Inner>, id: &str) -> AppResult<()> {
         missing.into_iter().collect::<Vec<_>>()
     };
     if missing.is_empty() {
-        return Ok(());
+        return Ok(in_use);
     }
     let client = s.client().map_err(|_| {
         "This file is not cached. Connect to pCloud to make it available.".to_string()
@@ -471,7 +574,7 @@ pub(crate) fn ensure_file(s: &Arc<Inner>, id: &str) -> AppResult<()> {
             .ingest_objects(vec![object])
             .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(in_use)
 }
 
 fn is_retired(s: &Inner, salt: &str) -> AppResult<bool> {
@@ -570,6 +673,51 @@ mod tests {
         assert!(object_name("A0000000000000000000000000000000", "chunk").is_err());
         assert!(object_name("a0000000000000000000000000000000", "chunk").is_ok());
     }
+    #[test]
+    fn feed_events_track_created_deleted_moved_and_reset_objects() {
+        let name =
+            |prefix: &str, digit: char| format!("{prefix}-{}.obj", digit.to_string().repeat(32));
+        let event = |kind: &str, name: String, parent: u64| pcloud_api::DiffEvent {
+            id: 1,
+            event: kind.into(),
+            time: 1,
+            metadata: Some(Metadata {
+                id: 9,
+                name,
+                is_folder: false,
+                parent_folder_id: parent,
+                size: 48,
+                modified: 1,
+            }),
+        };
+        let mut found = std::collections::BTreeMap::new();
+        apply_feed_events(
+            &mut found,
+            vec![
+                event("createfile", name("h", 'a'), 7),
+                event("createfile", name("m", 'b'), 7),
+                event("deletefile", name("m", 'b'), 7),
+                event("createfile", name("c", 'c'), 7),
+                event("modifyfile", name("c", 'c'), 8),
+                event("createfile", name("h", 'd'), 8),
+                event("createfile", "notes.txt".into(), 7),
+            ],
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            found.keys().cloned().collect::<Vec<_>>(),
+            vec![name("h", 'a')]
+        );
+        let reset = pcloud_api::DiffEvent {
+            id: 2,
+            event: "reset".into(),
+            time: 2,
+            metadata: None,
+        };
+        assert!(apply_feed_events(&mut found, vec![reset], 7).is_err());
+    }
+
     #[test]
     fn envelopes_roundtrip_without_exposing_names() {
         let object = ReplicationObject {

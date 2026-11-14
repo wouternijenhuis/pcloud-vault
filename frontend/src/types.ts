@@ -16,6 +16,7 @@ export type ActionArguments = {
   lock_vault: Record<string, never>
   forget_device: Record<string, never>
   connect_pcloud: { clientId: string }
+  connect_pcloud_web: Record<string, never>
   save_settings: { cacheLimitGib: number; clientId: string }
   new_folder: { location: Location; parentId: string | null; name: string }
   rename_entry: { location: Location; id: string; name: string }
@@ -34,7 +35,7 @@ export type ActionArguments = {
 }
 export type ActionResults = {
   create_vault: AppStatus; unlock_vault: AppStatus; lock_vault: AppStatus; forget_device: AppStatus
-  connect_pcloud: AppStatus; save_settings: AppStatus
+  connect_pcloud: AppStatus; connect_pcloud_web: AppStatus; save_settings: AppStatus
   new_folder: void; rename_entry: void; move_entry: void; trash_entry: void; restore_entry: void
   toggle_favorite: void; toggle_pin: void; import_files: void; import_cloud_file: void; download_entry: void
   open_entry: void; sync_now: void; change_password: void; export_recovery: void

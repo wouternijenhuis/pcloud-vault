@@ -49,7 +49,7 @@ export async function runAction<K extends keyof ActionArguments>(command: K, arg
       case 'unlock_vault': demoStatus = { ...demoStatus, unlocked: true }; break
       case 'lock_vault': demoStatus = { ...demoStatus, unlocked: false }; break
       case 'forget_device': demoStatus = { ...demoStatus, vaultExists: false, unlocked: false }; break
-      case 'connect_pcloud': demoStatus = { ...demoStatus, connected: true, accountEmail: 'alex@example.com', region: 'eu' }; break
+      case 'connect_pcloud': case 'connect_pcloud_web': demoStatus = { ...demoStatus, connected: true, accountEmail: 'alex@example.com', region: 'eu' }; break
       case 'save_settings': demoStatus = { ...demoStatus, cacheLimitBytes: Number(values.cacheLimitGib) * 1024 ** 3, oauthClientId: String(values.clientId) }; break
       case 'new_folder': demoEntries.unshift({ id: `folder-${Date.now()}`, name: String(values.name), parentId: (values.parentId as string | null) ?? null, kind: 'folder', size: 0, modified: Date.now(), starred: false, pinned: false, trashed: false, syncState: 'local' }); break
       case 'rename_entry': if (item) item.name = String(values.name); break
@@ -63,7 +63,7 @@ export async function runAction<K extends keyof ActionArguments>(command: K, arg
       default: break
     }
     if (['new_folder', 'rename_entry', 'move_entry', 'trash_entry', 'restore_entry', 'toggle_favorite', 'toggle_pin', 'sync_now'].includes(command)) activity.unshift({ id: String(Date.now()), message: command.replaceAll('_', ' '), time: Date.now(), kind: 'success' })
-    if (['create_vault', 'unlock_vault', 'lock_vault', 'forget_device', 'connect_pcloud', 'save_settings'].includes(command)) return { ...demoStatus } as ActionResults[K]
+    if (['create_vault', 'unlock_vault', 'lock_vault', 'forget_device', 'connect_pcloud', 'connect_pcloud_web', 'save_settings'].includes(command)) return { ...demoStatus } as ActionResults[K]
     return undefined as ActionResults[K]
   })
 }

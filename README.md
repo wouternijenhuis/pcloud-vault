@@ -6,7 +6,7 @@ A standalone Windows 11 client for pCloud with a quiet, premium interface and lo
 
 Run the Windows installer or the portable `pcloud-vault.exe`. Connect your pCloud account, then create or unlock Private Vault with one unique passphrase of at least 12 characters. Remembering the PC protects its unlock key with your Windows account and starts the app quietly at sign-in. Closing the window keeps transfers running in the tray; use the tray menu to open, lock, or quit.
 
-**pCloud integration prerequisite:** register your own personal-use OAuth application in pCloud's developer portal (pCloud may require manual approval). Then configure its public client ID in Settings with callback `http://127.0.0.1:43187/callback`. No client secret is embedded. Until then, choose **Work locally** to create a real encrypted vault and import/export files on this PC. See [pCloud setup](docs/PCLOUD_SETUP.md).
+**Connecting pCloud:** choose **Sign in on pCloud website**. A separate private window shows pCloud's own sign-in page, including two-step verification, and no developer registration is needed. Alternatively, register your own personal-use OAuth application in pCloud's developer portal (pCloud may require manual approval) and use its public client ID with callback `http://127.0.0.1:43187/callback`. No client secret is embedded. You can also choose **Work locally** to create a real encrypted vault and import/export files on this PC only. See [pCloud setup](docs/PCLOUD_SETUP.md).
 
 Private Vault is separate from **pCloud Files**, which is explicitly unencrypted. Importing copies files and preserves the originals. Folder drag-and-drop imports are supported. Favorites, offline pins, encrypted caching, search, image previews, trash/restore, password changes, and recovery-key export are available inside the app. Ordinary cloud folders/files support browsing, rename, move, download, and trash; individual cloud files can be copied into Private Vault. Restore ordinary cloud deletions through pCloud's own Trash.
 
@@ -15,7 +15,7 @@ Exporting or choosing **Export and open** creates a decrypted copy at a location
 ## Encryption and sync
 
 - RustCrypto Argon2id (256 MiB, three passes, one lane) protects a random 256-bit root key. XChaCha20-Poly1305 authenticates encrypted 4 MiB file chunks and metadata.
-- Filenames, folders, previews managed on disk, and local preferences stay encrypted. OAuth tokens and remembered keys use current-user Windows DPAPI. Passwords are never persisted.
+- Filenames, folders, previews managed on disk, and local preferences stay encrypted. pCloud sign-in tokens and remembered keys use current-user Windows DPAPI. Passwords are never persisted.
 - Immutable encrypted commits and causal merge preserve concurrent edits as recoverable conflict copies. Uploads verify object bytes before publishing dependent commits. An encrypted local journal preserves queued work across restarts.
 - Pin folders or files to keep their contents offline on this PC. The default 10 GiB cache limit is soft when pinned or pending data needs more space. Favorites and pins are per-PC preferences.
 - Each new PC connects the same account and unlocks the vault with its password once. A password change rewraps the root key; it does not revoke previously trusted PCs or older password wrappers held in cloud history.

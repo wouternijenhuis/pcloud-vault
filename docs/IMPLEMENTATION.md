@@ -18,7 +18,18 @@ Content objects and encrypted commits are durable before a local mutation succee
 
 Incoming chunks are authenticated against a known manifest before they are stored, because immutable storage never replaces an object. Commits that authenticate but are semantically invalid (for example from a buggy or incompatible client) are quarantined deterministically together with their descendants. This keeps the vault readable on every PC. Remote objects that fail validation are skipped and retried on the next sync instead of pausing replication.
 
-Reconciliation lists the remote objects folder on every sync. The pCloud diff cursor is recorded, and a rejected or expired cursor falls back to a fresh position, but incremental diff-driven discovery is not implemented yet.
+Sync discovers new remote objects incrementally from pCloud's change feed. It replays events after the saved cursor and keeps files created in the vault's objects folder, dropping any that were later deleted or moved out. A full objects listing is used instead in these cases:
+
+- first connection, or a changed objects folder
+- the first sync after upgrading from a version without incremental discovery
+- a missing cursor, a cursor older than 150 days, or a rejected cursor
+- a feed `reset` event
+- a backlog of more than 50 feed pages
+- any object skipped in the previous sync, because it was invalid or could not be downloaded
+
+The feed position for a full listing is taken before listing, and the cursor advances only after every discovered object was ingested.
+
+Files that are being previewed, exported or pinned are registered as in use, and cache eviction keeps their chunks until the operation finishes.
 
 Password changes first prepare a complete authenticated wrapper, persist `pending-header.json`, and adopt it locally. Sync verifies remote identity without reverting the pending local password, publishes/read-back verifies the new wrapper, then removes the pending marker. A restart replays a durable pending wrapper before unlock, and only if it belongs to the same vault. Each PC records the random salts of the wrappers it has superseded and never adopts them again, so a reverted cloud header cannot silently restore an older password. A wrapper that was changed concurrently on another PC wins over an unpublished local change, and the app reports this. Password reset/revocation across previously trusted devices is deliberately not implied.
 

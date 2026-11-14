@@ -7,6 +7,7 @@ fn main() {
         "lock_vault",
         "forget_device",
         "connect_pcloud",
+        "connect_pcloud_web",
         "save_settings",
         "new_folder",
         "rename_entry",
