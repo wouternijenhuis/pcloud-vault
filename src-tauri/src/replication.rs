@@ -163,15 +163,45 @@ fn remote_objects(s: &Inner, client: &Client) -> AppResult<Vec<Metadata>> {
         .ok_or("No remote vault folder is configured")?;
     let objects = client.list_folder(folder).map_err(|e| e.to_string())?;
     let mut names = HashSet::new();
-    for entry in &objects {
-        if !entry.is_folder && entry.name.ends_with(".obj") {
-            if !names.insert(entry.name.clone()) {
-                return Err("Duplicate encrypted object names found in pCloud. Sync paused to preserve your data.".into());
-            }
-            object_identity(&entry.name)?;
+    let mut valid = Vec::with_capacity(objects.len());
+    for entry in objects {
+        if entry.is_folder || !entry.name.ends_with(".obj") {
+            continue;
         }
+        // Unexpected names (for example a leftover renamed duplicate) are ignored rather
+        // than pausing sync for every PC; they are never treated as vault objects.
+        if object_identity(&entry.name).is_err() {
+            continue;
+        }
+        if !names.insert(entry.name.clone()) {
+            return Err("Duplicate encrypted object names found in pCloud. Sync paused to preserve your data.".into());
+        }
+        valid.push(entry);
     }
-    Ok(objects)
+    Ok(valid)
+}
+
+/// Ingests a batch; if it is rejected, retries each object alone so one invalid object
+/// (from a buggy or incompatible client) cannot stop every later sync. Skipped objects are
+/// retried on the next sync, when their dependencies may have arrived.
+fn ingest_tolerantly(s: &Inner, objects: Vec<ReplicationObject>) -> AppResult<()> {
+    let mut guard = locked(&s.vault)?;
+    let vault = guard.as_mut().ok_or("Vault locked")?;
+    if vault.ingest_objects(objects.clone()).is_ok() {
+        return Ok(());
+    }
+    let skipped = objects
+        .into_iter()
+        .filter(|object| vault.ingest_objects(vec![object.clone()]).is_err())
+        .count();
+    if skipped > 0 {
+        drop(guard);
+        s.log(
+            &format!("Skipped {skipped} encrypted object(s) that failed validation."),
+            "info",
+        );
+    }
+    Ok(())
 }
 
 pub(crate) struct SyncGuard<'a>(&'a Inner);
@@ -243,33 +273,46 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
         serde_json::from_slice(&download(&client, published.id, 64 * 1024)?)
             .map_err(|_| "Invalid remote vault header")?;
     remote_header.validate().map_err(|e| e.to_string())?;
+    let pending_path = s.directory.join("pending-header.json");
+    let mut republish = pending_path.exists();
     {
         let mut guard = locked(&s.vault)?;
         let vault = guard.as_mut().ok_or("Vault locked")?;
         vault.verify_header(&remote_header).map_err(|_| "The remote vault belongs to a different vault or its key envelope was altered. Sync paused without exchanging file data.".to_string())?;
-        if !s.directory.join("pending-header.json").exists() {
-            vault
-                .adopt_header(&remote_header)
-                .map_err(|e| e.to_string())?;
+        let current_salt = vault.header().salt.clone();
+        if remote_header.salt != current_salt {
+            if is_retired(s, &remote_header.salt)? {
+                // Every wrapper this PC replaced stays retired, so an older (possibly
+                // compromised) password cannot silently come back through the cloud.
+                s.log(
+                    "The cloud vault header was reverted to an older password. Restoring the current one.",
+                    "info",
+                );
+                republish = true;
+            } else {
+                retire_header(s, &current_salt)?;
+                vault
+                    .adopt_header(&remote_header)
+                    .map_err(|e| e.to_string())?;
+                if pending_path.exists() {
+                    fs::remove_file(&pending_path).map_err(|e| e.to_string())?;
+                    republish = false;
+                    s.log("The vault password was changed on another PC at the same time. That password now applies; the change made on this PC was not applied.", "info");
+                }
+            }
         }
     }
-    if s.directory.join("pending-header.json").exists() {
-        let pending: VaultHeader = serde_json::from_slice(
-            &fs::read(s.directory.join("pending-header.json")).map_err(|e| e.to_string())?,
-        )
-        .map_err(|_| "Pending password update is invalid")?;
-        locked(&s.vault)?
-            .as_mut()
-            .ok_or("Vault locked")?
-            .adopt_header(&pending)
-            .map_err(|e| e.to_string())?;
+    if republish {
         publish_header(s)?;
     }
     let obsolete =
         last_sync.is_none_or(|last| now().saturating_sub(last) > 150 * 24 * 60 * 60 * 1000);
+    // The authoritative object listing below drives reconciliation. A rejected or expired
+    // cursor falls back to a fresh feed position instead of blocking sync.
     let batch = client
         .diff(if obsolete { None } else { cursor }, false)
-        .map_err(|e| e.to_string())?;
+        .or_else(|_| client.diff(None, false))
+        .ok();
     // Reconcile the authoritative object listing after feed inspection. Names are opaque;
     // metadata authentication and causality are checked by the core before exposure.
     let remote = remote_objects(s, &client)?;
@@ -291,26 +334,21 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
         if object_identity(&entry.name)?.1 == "chunk" {
             continue;
         }
-        let object = decode(&entry.name, download(&client, entry.id, MAX_METADATA)?)?;
+        let Ok(object) = decode(&entry.name, download(&client, entry.id, MAX_METADATA)?) else {
+            s.log("Skipped an unreadable encrypted object in pCloud.", "info");
+            continue;
+        };
         // Keep metadata and causal history; chunks are fetched on demand. Avoid
         // retaining a whole account's file contents in the client's memory.
         if object.kind != "chunk" {
             incoming.push(object);
         }
         if incoming.len() >= 128 {
-            locked(&s.vault)?
-                .as_mut()
-                .ok_or("Vault locked")?
-                .ingest_objects(std::mem::take(&mut incoming))
-                .map_err(|e| e.to_string())?;
+            ingest_tolerantly(s, std::mem::take(&mut incoming))?;
         }
     }
     if !incoming.is_empty() {
-        locked(&s.vault)?
-            .as_mut()
-            .ok_or("Vault locked")?
-            .ingest_objects(incoming)
-            .map_err(|e| e.to_string())?;
+        ingest_tolerantly(s, incoming)?;
     }
     let pending = {
         let vault = locked(&s.vault)?;
@@ -333,7 +371,9 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
     }
     {
         let mut settings = locked(&s.settings)?;
-        settings.diff_cursor = Some(batch.cursor);
+        if let Some(batch) = batch {
+            settings.diff_cursor = Some(batch.cursor);
+        }
         settings.last_sync = Some(now());
     }
     s.save_settings()?;
@@ -434,6 +474,30 @@ pub(crate) fn ensure_file(s: &Arc<Inner>, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+fn is_retired(s: &Inner, salt: &str) -> AppResult<bool> {
+    Ok(locked(&s.settings)?
+        .retired_header_salts
+        .iter()
+        .any(|retired| retired == salt))
+}
+
+/// Records a superseded password wrapper (identified by its unique random salt) so it is
+/// never adopted again. Salts are public header fields, not secrets.
+pub(crate) fn retire_header(s: &Inner, salt: &str) -> AppResult<()> {
+    {
+        let mut settings = locked(&s.settings)?;
+        if settings
+            .retired_header_salts
+            .iter()
+            .any(|retired| retired == salt)
+        {
+            return Ok(());
+        }
+        settings.retired_header_salts.push(salt.to_string());
+    }
+    s.save_settings()
+}
+
 pub(crate) fn publish_header(s: &Arc<Inner>) -> AppResult<()> {
     let client = s.client()?;
     let folder = locked(&s.settings)?
@@ -462,6 +526,13 @@ pub(crate) fn publish_header(s: &Arc<Inner>) -> AppResult<()> {
         vault
             .verify_header(&remote)
             .map_err(|_| "Remote vault identity changed; password update paused")?;
+        // Overwrite only the wrapper this PC last adopted (or one it already retired);
+        // anything else is a newer password from another PC that the next sync adopts.
+        if remote.salt != vault.header().salt && !is_retired(s, &remote.salt)? {
+            return Err(
+                "The vault password was changed on another PC. Sync again to adopt it.".into(),
+            );
+        }
         vault.adopt_header(&pending).map_err(|e| e.to_string())?;
     }
     let length = bytes.len() as u64;

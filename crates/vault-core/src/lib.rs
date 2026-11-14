@@ -658,8 +658,17 @@ impl Vault {
         // An incoming causal successor may replace a currently visible register value.
         // Persist its exposed conflict copies before integrating that successor.
         self.preserve_conflicts()?;
-        for object in &objects {
+        let (chunks, metadata): (Vec<_>, Vec<_>) = objects
+            .into_iter()
+            .partition(|object| object.kind == "chunk");
+        for object in &metadata {
             self.store.validate_metadata(object)?;
+            self.store.insert(object)?;
+        }
+        // Immutable storage never replaces an object, so a corrupted or substituted chunk
+        // must be rejected before it is stored rather than discovered on a later read.
+        self.validate_known_chunks(&chunks)?;
+        for object in &chunks {
             self.store.insert(object)?;
         }
         self.rebuild()?;
@@ -876,6 +885,42 @@ impl Vault {
         }
         Ok(())
     }
+    /// Authenticates incoming chunks against any locally known manifest that references them.
+    fn validate_known_chunks(&self, chunks: &[ReplicationObject]) -> Result<()> {
+        let mut wanted: BTreeMap<&str, &ReplicationObject> = chunks
+            .iter()
+            .filter(|object| !self.has_object(&object.id))
+            .map(|object| (object.id.as_str(), object))
+            .collect();
+        for (id, kind) in &self.store.kinds {
+            if wanted.is_empty() {
+                break;
+            }
+            if kind != "manifest" {
+                continue;
+            }
+            let Ok(manifest) = self.store.metadata::<Manifest>("manifest", id) else {
+                continue;
+            };
+            for (index, chunk) in manifest.chunks.iter().enumerate() {
+                if let Some(object) = wanted.remove(chunk.id.as_str()) {
+                    let aad = chunk_aad(
+                        self.vault_id(),
+                        &manifest.file_id,
+                        &manifest.version_id,
+                        &chunk.id,
+                        index,
+                        chunk.length as usize,
+                    )?;
+                    let plaintext = Zeroizing::new(open(&manifest.key, &object.data, &aad)?);
+                    if plaintext.len() != chunk.length as usize {
+                        return Err(Error::Authentication);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     fn decrypt_chunk(&self, manifest: &Manifest, index: usize) -> Result<Zeroizing<Vec<u8>>> {
         let chunk = manifest.chunks.get(index).ok_or(Error::Authentication)?;
         let object = self.store.object(&chunk.id)?;
@@ -985,13 +1030,14 @@ impl Vault {
                     continue;
                 }
                 let manifest: Manifest = self.store.metadata("manifest", manifest_id)?;
-                self.validate_manifest(&manifest)?;
                 let expected_size = match &commit.operation {
                     Operation::Create { size, .. } | Operation::Write { size, .. } => *size,
                     _ => 0,
                 };
-                if manifest.size != expected_size {
-                    return Err(Error::Authentication);
+                // Authenticated but semantically invalid content is quarantined (with its
+                // descendants) so it cannot make the vault unreadable on every PC.
+                if self.validate_manifest(&manifest).is_err() || manifest.size != expected_size {
+                    continue;
                 }
             }
             all.insert(id.clone(), commit);

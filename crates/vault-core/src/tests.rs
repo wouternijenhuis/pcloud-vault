@@ -723,3 +723,89 @@ fn atomic_relocation_and_concurrent_target_edit_converge_without_losing_either_c
         a.entry(&temporary.id).unwrap().name.to_lowercase()
     );
 }
+
+#[test]
+fn authenticated_but_invalid_commits_are_quarantined_without_blocking_the_vault() {
+    let (_a_dir, mut a) = fixture();
+    let file = a
+        .import_file(None, "kept.txt", Cursor::new(b"still readable"))
+        .unwrap();
+    let (_forger_dir, mut forger) = replica(&a);
+    let (b_dir, mut b) = replica(&a);
+    let invalid_id = new_id();
+    let invalid = Commit {
+        id: invalid_id.clone(),
+        parents: forger.heads.clone(),
+        device_id: forger.local.device_id.clone(),
+        modified: 1,
+        operation: Operation::Relocate {
+            id: file.id.clone(),
+            parent: None,
+            name: "never.txt".into(),
+            displaced: Some(new_id()),
+        },
+    };
+    forger
+        .store
+        .put_metadata("commit", &invalid_id, &invalid)
+        .unwrap();
+    let descendant_id = new_id();
+    let descendant = Commit {
+        id: descendant_id.clone(),
+        parents: vec![invalid_id.clone()],
+        device_id: forger.local.device_id.clone(),
+        modified: 2,
+        operation: Operation::Rename {
+            id: file.id.clone(),
+            name: "descendant.txt".into(),
+        },
+    };
+    forger
+        .store
+        .put_metadata("commit", &descendant_id, &descendant)
+        .unwrap();
+    b.ingest_objects(vec![
+        forger.object(&invalid_id).unwrap(),
+        forger.object(&descendant_id).unwrap(),
+    ])
+    .unwrap();
+    assert_eq!(b.entry(&file.id).unwrap().name, "kept.txt");
+    assert_eq!(contents(&b, &file.id), b"still readable");
+    drop(b);
+    let reopened = Vault::open(b_dir.path(), "long test passphrase").unwrap();
+    assert_eq!(reopened.entry(&file.id).unwrap().name, "kept.txt");
+}
+
+#[test]
+fn tampered_chunks_are_rejected_before_they_are_stored() {
+    let (_a_dir, mut a) = fixture();
+    let file = a
+        .import_file(None, "remote.bin", Cursor::new(b"chunk payload"))
+        .unwrap();
+    let b_dir = tempfile::tempdir().unwrap();
+    let mut b = Vault::attach_with_key(b_dir.path(), a.header(), a.key_bytes()).unwrap();
+    let metadata: Vec<_> = a
+        .export_objects()
+        .unwrap()
+        .into_iter()
+        .filter(|object| object.kind != "chunk")
+        .collect();
+    b.ingest_objects(metadata).unwrap();
+    let chunk_id = b
+        .required_objects(&file.id)
+        .unwrap()
+        .into_iter()
+        .find(|id| !b.has_object(id))
+        .unwrap();
+    let genuine = a.object(&chunk_id).unwrap();
+    let mut tampered = genuine.clone();
+    let last = tampered.data.len() - 1;
+    tampered.data[last] ^= 1;
+    assert!(matches!(
+        b.ingest_objects(vec![tampered]),
+        Err(Error::Authentication)
+    ));
+    assert!(!b.has_object(&chunk_id));
+    b.ingest_objects(vec![genuine]).unwrap();
+    assert_eq!(contents(&b, &file.id), b"chunk payload");
+}

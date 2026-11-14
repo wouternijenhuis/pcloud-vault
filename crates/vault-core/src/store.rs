@@ -33,6 +33,38 @@ pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Renames a file and flushes the directory change before returning, so an acknowledged
+/// object or checkpoint survives power loss. The destination must not exist.
+pub(crate) fn durable_rename(from: &Path, to: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{
+            core::PCWSTR,
+            Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH},
+        };
+        let source: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+        let destination: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+        // SAFETY: both buffers are NUL-terminated UTF-16 paths that outlive the call.
+        unsafe {
+            MoveFileExW(
+                PCWSTR(source.as_ptr()),
+                PCWSTR(destination.as_ptr()),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        }
+        .map_err(|error| std::io::Error::from_raw_os_error(error.code().0 & 0xFFFF))?;
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(from, to)?;
+        if let Some(parent) = to.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let directory = path
         .parent()
@@ -47,13 +79,13 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         if backup.exists() {
             fs::remove_file(&backup)?;
         }
-        fs::rename(path, &backup)?;
+        durable_rename(path, &backup)?;
     }
-    if let Err(error) = fs::rename(&staging, path) {
+    if let Err(error) = durable_rename(&staging, path) {
         if backup.exists() && !path.exists() {
-            let _ = fs::rename(&backup, path);
+            let _ = durable_rename(&backup, path);
         }
-        return Err(error.into());
+        return Err(error);
     }
     if backup.exists() {
         fs::remove_file(backup)?;
@@ -64,7 +96,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 pub(crate) fn recover_checkpoint(path: &Path) -> Result<()> {
     let previous = path.with_extension("previous");
     if !path.exists() && previous.exists() {
-        fs::rename(previous, path)?;
+        durable_rename(&previous, path)?;
     }
     Ok(())
 }
@@ -154,7 +186,7 @@ impl ObjectStore {
         let directory = self.root.join("objects");
         let staging = directory.join(format!("{}.tmp", new_id()));
         write_new(&staging, &bytes)?;
-        fs::rename(&staging, directory.join(format!("{}.obj", object.id)))?;
+        durable_rename(&staging, &directory.join(format!("{}.obj", object.id)))?;
         self.kinds.insert(object.id.clone(), object.kind.clone());
         Ok(())
     }

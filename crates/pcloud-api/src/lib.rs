@@ -411,7 +411,9 @@ impl Client {
         }
         let uploaded = self.upload_reader(parent, name, Cursor::new(data), length, true)?;
         if uploaded.name != name {
-            // A racing uploader may have created the same immutable object. Validate the canonical object.
+            // A racing uploader may have created the same immutable object. Remove the
+            // renamed duplicate this call created, then validate the canonical object.
+            self.delete_file(uploaded.id)?;
             let canonical = self
                 .list_folder(parent)?
                 .into_iter()

@@ -71,16 +71,40 @@ pub(crate) fn reduce(commits: &BTreeMap<String, Commit>, local: &LocalState) -> 
                 || !valid_id(&commit.device_id)
                 || commit.parents.len() > 4096
             {
-                return Err(Error::InvalidFormat("invalid commit identity".into()));
+                // Quarantined: it never enters history, so its descendants stay unresolved too.
+                continue;
             }
             let mut ancestors = BTreeSet::new();
             for parent in &commit.parents {
                 ancestors.insert(parent.clone());
                 ancestors.extend(history[parent].iter().cloned());
-                heads.remove(parent);
             }
             history.insert(id.clone(), ancestors);
+            // A semantically invalid commit (from a buggy or incompatible client) is skipped
+            // deterministically instead of making the whole vault unreadable on every PC.
+            let applied = apply_commit(&id, &commit, &history, &mut records);
+            if applied.is_err() {
+                history.remove(&id);
+                continue;
+            }
+            for parent in &commit.parents {
+                heads.remove(parent);
+            }
             heads.insert(id.clone());
+        }
+    }
+    resolve(commits, local, history, records, heads)
+}
+
+fn apply_commit(
+    id: &str,
+    commit: &Commit,
+    history: &History,
+    records: &mut BTreeMap<String, Raw>,
+) -> Result<()> {
+    {
+        {
+            let id = id.to_string();
             let entry_id = commit.operation.entry_id().to_string();
             if !valid_id(&entry_id) {
                 return Err(Error::InvalidFormat("invalid entry id".into()));
@@ -99,14 +123,14 @@ pub(crate) fn reduce(commits: &BTreeMap<String, Commit>, local: &LocalState) -> 
                     if existing.kind != *kind {
                         return Err(Error::InvalidFormat("inconsistent file identity".into()));
                     }
-                    existing.names.set(&id, name.clone(), &history);
-                    existing.parents.set(&id, parent.clone(), &history);
+                    existing.names.set(&id, name.clone(), history);
+                    existing.parents.set(&id, parent.clone(), history);
                     existing
                         .contents
-                        .set(&id, (manifest.clone(), *size), &history);
-                    existing.live.set(&id, (), &history);
+                        .set(&id, (manifest.clone(), *size), history);
+                    existing.live.set(&id, (), history);
                     existing.modified = existing.modified.max(commit.modified);
-                    continue;
+                    return Ok(());
                 }
                 records.insert(
                     entry_id,
@@ -120,7 +144,7 @@ pub(crate) fn reduce(commits: &BTreeMap<String, Commit>, local: &LocalState) -> 
                         modified: commit.modified,
                     },
                 );
-                continue;
+                return Ok(());
             }
             if let Operation::Relocate {
                 parent,
@@ -152,16 +176,16 @@ pub(crate) fn reduce(commits: &BTreeMap<String, Commit>, local: &LocalState) -> 
                     }
                 }
                 let source = records.get_mut(&entry_id).expect("source was validated");
-                source.names.set(&id, name.clone(), &history);
-                source.parents.set(&id, parent.clone(), &history);
-                source.live.set(&id, (), &history);
+                source.names.set(&id, name.clone(), history);
+                source.parents.set(&id, parent.clone(), history);
+                source.live.set(&id, (), history);
                 source.modified = source.modified.max(commit.modified);
                 if let Some(target_id) = displaced {
                     let target = records.get_mut(target_id).expect("target was validated");
-                    target.trash.set(&id, true, &history);
+                    target.trash.set(&id, true, history);
                     target.modified = target.modified.max(commit.modified);
                 }
-                continue;
+                return Ok(());
             }
             let Some(record) = records.get_mut(&entry_id) else {
                 return Err(Error::InvalidFormat(
@@ -175,22 +199,22 @@ pub(crate) fn reduce(commits: &BTreeMap<String, Commit>, local: &LocalState) -> 
                     }
                     record
                         .contents
-                        .set(&id, (Some(manifest.clone()), *size), &history);
-                    record.live.set(&id, (), &history);
+                        .set(&id, (Some(manifest.clone()), *size), history);
+                    record.live.set(&id, (), history);
                 }
                 Operation::Rename { name, .. } => {
                     crate::validate_name(name)?;
-                    record.names.set(&id, name.clone(), &history);
-                    record.live.set(&id, (), &history);
+                    record.names.set(&id, name.clone(), history);
+                    record.live.set(&id, (), history);
                 }
                 Operation::Move { parent, .. } => {
-                    record.parents.set(&id, parent.clone(), &history);
-                    record.live.set(&id, (), &history);
+                    record.parents.set(&id, parent.clone(), history);
+                    record.live.set(&id, (), history);
                 }
                 Operation::Trash { trashed, .. } => {
-                    record.trash.set(&id, *trashed, &history);
+                    record.trash.set(&id, *trashed, history);
                     if !trashed {
-                        record.live.set(&id, (), &history);
+                        record.live.set(&id, (), history);
                     }
                 }
                 Operation::Create { .. } | Operation::Relocate { .. } => unreachable!(),
@@ -198,7 +222,16 @@ pub(crate) fn reduce(commits: &BTreeMap<String, Commit>, local: &LocalState) -> 
             record.modified = record.modified.max(commit.modified);
         }
     }
+    Ok(())
+}
 
+fn resolve(
+    commits: &BTreeMap<String, Commit>,
+    local: &LocalState,
+    history: History,
+    records: BTreeMap<String, Raw>,
+    heads: BTreeSet<String>,
+) -> Result<Reduction> {
     let mut entries = Resolved::new();
     for (id, record) in &records {
         let (trash_id, deleted) = record.trash.winner();

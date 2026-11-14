@@ -35,6 +35,8 @@ pub(crate) struct Settings {
     pub remote_objects: Option<u64>,
     pub diff_cursor: Option<u64>,
     pub last_sync: Option<u64>,
+    /// Salts of password wrappers this PC has superseded; never adopted again.
+    pub retired_header_salts: Vec<String>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -45,6 +47,7 @@ impl Default for Settings {
             remote_objects: None,
             diff_cursor: None,
             last_sync: None,
+            retired_header_salts: Vec::new(),
         }
     }
 }
@@ -1012,9 +1015,15 @@ async fn change_password(
             let mut vault = locked(&s.vault)?; let vault = vault.as_mut().ok_or("Unlock your vault first")?;
             let prepared = vault.prepare_password_change(&old, &new).map_err(|e| e.to_string())?;
             atomic_write(&s.directory.join("pending-header.json"), &serde_json::to_vec(&prepared).map_err(|e| e.to_string())?)?;
+            let superseded = vault.header().salt.clone();
             vault.adopt_header(&prepared).map_err(|e| e.to_string())?;
+            replication::retire_header(&s, &superseded)?;
         }
-        if locked(&s.account)?.is_some() {
+        if locked(&s.account)?.is_none() {
+            // Nothing to publish: the adopted local header is authoritative. A stale pending
+            // wrapper must not outlive this vault and be replayed over a different one later.
+            fs::remove_file(s.directory.join("pending-header.json")).map_err(|e| e.to_string())?;
+        } else {
             if let Err(error) = replication::publish_header(&s) { s.log("Password changed locally; the encrypted cloud update is pending and will retry automatically.", "info"); return Err(format!("Password changed on this PC. Cloud update is pending: {error}")); }
         }
         s.log("Vault password changed. Already trusted PCs retain their keys.", "success"); Ok(())
@@ -1085,11 +1094,18 @@ pub fn run() {
             // Pending wrappers contain no plaintext secret. Replay a prepared
             // password update before any password/DPAPI unlock after a crash.
             if let Ok(pending) = fs::read(directory.join("pending-header.json")) {
-                if let Ok(header) = serde_json::from_slice::<vault_core::VaultHeader>(&pending) {
-                    if header.validate().is_ok() && directory.join("vault/vault.json").exists() {
+                let header = serde_json::from_slice::<vault_core::VaultHeader>(&pending).ok();
+                let current = vault_core::Vault::read_header(&directory.join("vault")).ok();
+                match (header, current) {
+                    (Some(header), Some(current))
+                        if header.validate().is_ok() && header.vault_id == current.vault_id =>
+                    {
                         atomic_write(&directory.join("vault/vault.json"), &pending)
                             .map_err(std::io::Error::other)?;
                     }
+                    // A wrapper for another (or no) vault must never replace this vault's
+                    // only key envelope; discard it.
+                    _ => fs::remove_file(directory.join("pending-header.json"))?,
                 }
             }
             let settings = fs::read(directory.join("settings.json"))
