@@ -157,10 +157,13 @@ describe('pCloud Vault interface', () => {
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Keep offline' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('toggle_pin', { id: 'photo' }))
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-    fireEvent.keyDown(await screen.findByText('Notes.md'), { key: 'F10', shiftKey: true })
+    const row = (await screen.findByText('Notes.md')).closest<HTMLElement>('[role="button"]')!
+    row.focus()
+    fireEvent.keyDown(row, { key: 'F10', shiftKey: true })
     expect(screen.getByRole('menu', { name: 'Actions for Notes.md' })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(row)
   })
 
   it('acts on the newly selected item after a previous rename', async () => {
@@ -178,6 +181,18 @@ describe('pCloud Vault interface', () => {
     fireEvent.click(screen.getByText('Notes.md'))
     fireEvent.click(screen.getByRole('button', { name: 'Move to trash' }))
     expect(screen.getByRole('dialog')).toHaveTextContent('Notes.md')
+  })
+
+  it('shows matching files when searching from Settings and clears search on navigation', async () => {
+    useNativeBridge()
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    expect(await screen.findByLabelText('Cache limit')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Search files'), { target: { value: 'photo' } })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('list_entries', { location: 'vault', parentId: null, query: 'photo', view: 'files' }))
+    expect(screen.queryByLabelText('Cache limit')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByLabelText('Search files')).toHaveValue('')
   })
 
   it('requires twelve characters when creating a vault', async () => {

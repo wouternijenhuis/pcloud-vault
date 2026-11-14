@@ -414,6 +414,7 @@ async fn connect_pcloud_web(
                 return Err("pCloud sign-in was cancelled.".into());
             }
             if started.elapsed() > WEB_LOGIN_TIMEOUT {
+                let _ = window.clear_all_browsing_data();
                 let _ = window.close();
                 return Err("pCloud sign-in timed out. Try again.".into());
             }
@@ -422,6 +423,7 @@ async fn connect_pcloud_web(
             let Ok(cookies) = window.cookies_for_url(url.clone()) else {
                 unreadable += 1;
                 if unreadable >= 6 {
+                    let _ = window.clear_all_browsing_data();
                     let _ = window.close();
                     return Err("pCloud sign-in was cancelled.".into());
                 }

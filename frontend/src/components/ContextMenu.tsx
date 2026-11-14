@@ -7,6 +7,8 @@ type Props = { x: number; y: number; label: string; items: MenuItem[]; onClose: 
 /** A keyboard-accessible context menu, kept inside the window and closed by Escape, outside clicks or blur. */
 export function ContextMenu({ x, y, label, items, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null)
+  // Captured on first render, before the menu takes focus, so focus can return to the row.
+  const opener = useRef(document.activeElement as HTMLElement | null)
   const [position, setPosition] = useState({ left: x, top: y })
 
   useLayoutEffect(() => {
@@ -21,7 +23,6 @@ export function ContextMenu({ x, y, label, items, onClose }: Props) {
   }, [x, y])
 
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null
     const outside = (event: MouseEvent) => { if (!ref.current?.contains(event.target as Node)) onClose() }
     const keys = (event: KeyboardEvent) => {
       if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); onClose(); return }
@@ -42,7 +43,8 @@ export function ContextMenu({ x, y, label, items, onClose }: Props) {
       window.removeEventListener('keydown', keys)
       window.removeEventListener('blur', onClose)
       window.removeEventListener('resize', onClose)
-      previous?.focus()
+      const target = opener.current
+      if (target?.isConnected) target.focus()
     }
   }, [onClose])
 
