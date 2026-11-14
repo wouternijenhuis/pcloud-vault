@@ -75,6 +75,7 @@ jobs:
       - name: Assemble release files
         shell: pwsh
         run: |
+          # SHA256SUMS uses LF line endings so `sha256sum -c` works on every platform.
           $name = "pCloud-Vault-$env:VERSION-windows-x64"
           $stage = Join-Path $env:RUNNER_TEMP $name
           New-Item -ItemType Directory $stage | Out-Null
@@ -84,14 +85,14 @@ jobs:
           Copy-Item target/release/vault-recovery.exe $stage
           Copy-Item README.md, LICENSE, SECURITY.md, CHANGELOG.md, docs/QUICKSTART.txt $stage
           Push-Location $stage
-          Get-ChildItem -File | Sort-Object Name | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content -Encoding ascii SHA256SUMS.txt
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", ((Get-ChildItem -File | Sort-Object Name | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower(), $_.Name }) -join "`n") + "`n")
           Pop-Location
           $out = Join-Path $env:RUNNER_TEMP dist
           New-Item -ItemType Directory $out | Out-Null
           Compress-Archive -Path "$stage/*" -DestinationPath "$out/$name.zip"
           Copy-Item "$stage/pCloud-Vault-$env:VERSION-setup.exe" $out
           Push-Location $out
-          Get-ChildItem -File | Sort-Object Name | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content -Encoding ascii SHA256SUMS.txt
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", ((Get-ChildItem -File | Sort-Object Name | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower(), $_.Name }) -join "`n") + "`n")
           Pop-Location
           "DIST=$out" >> $env:GITHUB_ENV
 
