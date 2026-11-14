@@ -76,3 +76,45 @@ button:focus-visible, input:focus-visible, select:focus-visible, [role="button"]
 .dark .context-menu { background: #262b3f; border-color: #3a4055; box-shadow: 0 12px 36px #00000059; }
 .dark .context-menu [role="menuitem"] { color: #d5d9e7; }
 .dark .context-menu [role="menuitem"]:hover, .dark .context-menu [role="menuitem"]:focus-visible { background: #313754; color: #fff; }
+.wizard-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 18px; background: linear-gradient(160deg, #f4f5fb 0%, #eef0fb 100%); animation: fade-in .18s ease-out; }
+.wizard { width: min(100%, 560px); max-height: calc(100vh - 36px); overflow: auto; border: 1px solid #e6e8f1; border-radius: 16px; background: #fff; box-shadow: 0 24px 70px #1f264424; animation: rise-in .2s ease-out; }
+.wizard-steps { display: flex; gap: 6px; margin: 0; padding: 18px 26px; border-bottom: 1px solid #f0f1f5; list-style: none; }
+.wizard-steps li { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; color: #a3a8b8; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.wizard-steps li span { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #f1f2f6; font-size: 10px; }
+.wizard-steps li.current { color: #4f5bbf; }
+.wizard-steps li.current span { background: #6876d4; color: #fff; }
+.wizard-steps li.done { color: #5f9a7c; }
+.wizard-steps li.done span { background: #e8f4ed; color: #4f9070; }
+.wizard-body { padding: 26px 30px 24px; }
+.wizard-body h2 { margin: 0 0 8px; color: #30364a; font-size: 20px; font-weight: 650; letter-spacing: -.3px; }
+.wizard-lead { margin: 0 0 18px; color: #7f8598; font-size: 12px; line-height: 1.6; }
+.wizard-mark { display: grid; place-items: center; width: 52px; height: 52px; margin-bottom: 16px; border-radius: 16px; background: #eef0ff; color: #6876d4; }
+.wizard-mark.done { background: #e8f4ed; color: #4f9070; }
+.wizard-points { display: grid; gap: 12px; margin: 0 0 18px; padding: 0; list-style: none; }
+.wizard-points li { display: flex; gap: 12px; padding: 12px 14px; border: 1px solid #eef0f5; border-radius: 10px; background: #fafbfd; }
+.wizard-points li > svg { flex: none; margin-top: 1px; color: #6876d4; }
+.wizard-points strong { display: block; margin-bottom: 3px; color: #4a5064; font-size: 11px; }
+.wizard-points span { color: #8a90a2; font-size: 10px; line-height: 1.55; }
+.wizard-points.compact li { padding: 10px 12px; }
+.wizard-origin { display: flex; align-items: center; gap: 9px; margin: 0 0 4px; color: #8a90a2; font-size: 10px; }
+.eu-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 99px; background: #003399; color: #ffcc00; font-size: 9px; font-weight: 700; letter-spacing: .3px; }
+.eu-badge::before { content: "★"; font-size: 10px; }
+.wizard-connected { display: flex; align-items: center; gap: 11px; padding: 12px 14px; border: 1px solid #d8ecdf; border-radius: 10px; background: #f2f9f4; color: #4f9070; }
+.wizard-connected strong { display: block; color: #3f7a5d; font-size: 11px; }
+.wizard-connected span { color: #6f8f7d; font-size: 10px; }
+.wizard-wide { width: 100%; min-height: 40px; }
+.wizard-body .field-label + .field-label { margin-top: 12px; }
+.wizard-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 22px; }
+.wizard-actions .button { min-height: 38px; padding: 0 16px; }
+.dark .wizard-backdrop { background: linear-gradient(160deg, #191c2a 0%, #1e2234 100%); }
+.dark .wizard { background: #23273a; border-color: #34394d; }
+.dark .wizard-steps { border-color: #34394d; }
+.dark .wizard-steps li span { background: #2e3347; }
+.dark .wizard-body h2, .dark .wizard-points strong { color: #e4e7f1; }
+.dark .wizard-lead, .dark .wizard-points span, .dark .wizard-origin { color: #aab1c5; }
+.dark .wizard-points li { background: #282d40; border-color: #353a4f; }
+.dark .wizard-mark { background: #2f3555; }
+.dark .wizard-connected { background: #233229; border-color: #2f4a3a; }
+@media (max-width: 560px) { .wizard-steps li { font-size: 0; gap: 0; } .wizard-body { padding: 22px 20px; } }
+.app-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 16px 2px 0; color: #9a9eac; font-size: 9px; }
+.dark .app-origin { color: #9ba2b8; }

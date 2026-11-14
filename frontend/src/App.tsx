@@ -8,6 +8,7 @@ import {
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { Dialog } from './components/Dialog'
+import { WelcomeWizard } from './components/WelcomeWizard'
 import { getActivity, getStatus, importDemoFiles, importPaths, isDesktop, listEntries, previewEntry, runAction } from './api'
 import type { ActionArguments, Activity, AppStatus, Entry, Location, View } from './types'
 
@@ -21,6 +22,11 @@ const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024
 const timeLabel = (time: number) => new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(time))
 
 /** Tauri commands reject with the backend's message as a plain string, not an Error. */
+const WELCOME_KEY = 'pcloud-vault.welcome-complete'
+function welcomeCompleted() {
+  try { return localStorage.getItem(WELCOME_KEY) === '1' } catch { return false }
+}
+
 function errorMessage(reason: unknown, fallback: string) {
   if (reason instanceof Error && reason.message) return reason.message
   if (typeof reason === 'string' && reason.trim()) return reason
@@ -48,6 +54,8 @@ export default function App() {
   const [grid, setGrid] = useState(false)
   const [dark, setDark] = useState(false)
   const [localOnly, setLocalOnly] = useState(false)
+  // Decided once, from the first status: the guide runs on a PC that has no vault yet.
+  const [wizard, setWizard] = useState<boolean | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [settings, setSettings] = useState({ cacheLimitGib: 10, clientId: '' })
   const [settingsInitialized, setSettingsInitialized] = useState(false)
@@ -199,6 +207,11 @@ export default function App() {
     if (modal === 'connect') await perform('connect_pcloud', { clientId: settings.clientId }, 'pCloud connected')
     setPassword(''); setFormName(''); setModal(null); setCurrent(null)
   }
+  useEffect(() => { if (status && wizard === null) setWizard(desktop && !status.vaultExists && !welcomeCompleted()) }, [status, wizard, desktop])
+  const finishWizard = () => {
+    try { localStorage.setItem(WELCOME_KEY, '1') } catch { /* the guide simply shows again next time */ }
+    setError(''); setWizard(false)
+  }
   const openConnect = () => { setError(''); setModal('connect') }
   const connectWeb = async () => {
     if (!desktop) { announce('Website sign-in is available in the Windows app'); return }
@@ -253,6 +266,11 @@ export default function App() {
       <footer className="statusbar"><div><span className="status-online" />{status?.connected ? 'pCloud connected' : 'Local only'}</div><div>{status?.connected && status.unlocked ? status.pendingCount ? `${status.pendingCount} changes waiting` : 'All changes synced' : 'Sync status unavailable'}<span className="status-sep">·</span>Last sync {status?.connected && status.unlocked && status.lastSync ? timeLabel(status.lastSync) : '—'}</div></footer>
     </main>
 
+    {wizard && status && <WelcomeWizard status={status} busy={busy} error={error}
+      connect={() => perform('connect_pcloud_web', {}, 'pCloud connected')}
+      createVault={(secret, rememberPc) => perform('create_vault', { password: secret, remember: rememberPc }, 'Your private vault is ready')}
+      unlockVault={(secret, rememberPc) => perform('unlock_vault', { password: secret, remember: rememberPc }, 'Vault unlocked')}
+      exportRecovery={exportRecovery} workLocally={() => setLocalOnly(true)} finish={finishWizard} />}
     {menu && <ContextMenu x={menu.x} y={menu.y} label={`Actions for ${menu.entry.name}`} items={menuItems(menu.entry)} onClose={closeMenu} />}
     {modal === 'new' && <Dialog title="Create a folder" description="Give this folder a name. You can move files into it anytime." onClose={modalClose} onSubmit={onSubmit} submitLabel="Create folder" busy={busy}><label className="field-label">Folder name<input required maxLength={120} value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. Home documents" /></label></Dialog>}
     {modal === 'rename' && activeEntry && <Dialog title="Rename item" description="The item will keep its current location." onClose={modalClose} onSubmit={onSubmit} submitLabel="Save name" busy={busy}><label className="field-label">New name<input required maxLength={180} value={formName} onChange={e => setFormName(e.target.value)} /></label></Dialog>}
@@ -306,5 +324,5 @@ function CloudGate({ connect }: { connect: () => void }) {
 function SettingsPage({ status, settings, setSettings, save, connect, recovery, create, password, forget, desktop }: { status: AppStatus | null; settings: { cacheLimitGib: number; clientId: string }; setSettings: (value: { cacheLimitGib: number; clientId: string }) => void; save: () => void; connect: () => void; recovery: () => void; create: () => void; password: () => void; forget: () => void; desktop: boolean }) {
   return <div className="settings-page"><div className="settings-intro"><div className="settings-icon"><SettingsIcon size={20} /></div><div><h2>Make it yours</h2><p>Your vault stays private. Configure pCloud and local cache preferences.</p></div></div><div className="settings-layout"><section className="settings-card"><div className="settings-card-title"><div><h3>Private Vault</h3><p>On-device encryption and access.</p></div><span className="secure-pill"><ShieldCheck size={13} /> {status?.unlocked ? 'Unlocked' : 'Locked'}</span></div><div className="settings-row"><div><strong>{status?.vaultExists ? 'Vault is set up' : 'Create your vault'}</strong><small>{status?.vaultExists ? 'Your password unlocks this space on this PC.' : 'Start with one password you will remember.'}</small></div><button className="button button-subtle" onClick={create}>{status?.vaultExists ? status.unlocked ? 'Lock vault' : 'Unlock' : 'Set up vault'}</button></div><div className="settings-row"><div><strong>Change password</strong><small>Choose a new password for your private files.</small></div><button className="text-action" onClick={password}>Change <ChevronRight size={15} /></button></div><div className="settings-row"><div><strong>Recovery key</strong><small>Export your recovery key to a safe place.</small></div><button className="text-action" onClick={recovery}>Export recovery key <ChevronRight size={15} /></button></div><div className="settings-row"><div><strong>Forget this PC</strong><small>Remove remembered access from this computer.</small></div><button className="text-action danger-text" onClick={forget}>Forget device</button></div></section>
     <section className="settings-card"><div className="settings-card-title"><div><h3>pCloud account</h3><p>Connect your cloud storage to browse and sync files.</p></div><span className={`connection-pill ${status?.connected ? '' : 'offline'}`}><span />{status?.connected ? 'Connected' : 'Not connected'}</span></div><div className="connected-account"><div className="cloud-account-icon"><Cloud size={19} /></div><div><strong>{status?.accountEmail ?? 'No pCloud account connected'}</strong><small>{status?.region ? `${status.region.toUpperCase()} region` : 'Sign in to choose your account region'}</small></div><button className="button button-subtle" onClick={connect}>{status?.connected ? 'Reconnect' : 'Connect pCloud'}</button></div><div className="settings-row"><label className="field-label compact-field">OAuth client ID<input value={settings.clientId} onChange={e => setSettings({ ...settings, clientId: e.target.value })} placeholder="Your pCloud app client ID" /></label></div></section>
-    <section className="settings-card"><div className="settings-card-title"><div><h3>Local cache</h3><p>Choose the limit for files kept available offline.</p></div></div><div className="settings-columns"><label className="field-label">Cache limit<select value={settings.cacheLimitGib} onChange={e => setSettings({ ...settings, cacheLimitGib: Number(e.target.value) })}>{[2, 5, 10, 20, 50].map(value => <option key={value} value={value}>{value} GB</option>)}</select></label></div><div className="cache-detail"><div className="storage-track"><i style={{ width: `${status ? Math.min(100, status.cacheBytes / status.cacheLimitBytes * 100) : 0}%` }} /></div><small>{status ? `${(status.cacheBytes / 1024 ** 3).toFixed(1)} GB used of ${Math.round(status.cacheLimitBytes / 1024 ** 3)} GB` : 'Cache usage unavailable'}</small></div><div className="settings-footer"><span>{desktop ? 'Cache preferences apply on this PC.' : 'Browser preview does not change local settings.'}</span><button className="button button-primary" onClick={save}>Save settings</button></div></section></div></div>
+    <section className="settings-card"><div className="settings-card-title"><div><h3>Local cache</h3><p>Choose the limit for files kept available offline.</p></div></div><div className="settings-columns"><label className="field-label">Cache limit<select value={settings.cacheLimitGib} onChange={e => setSettings({ ...settings, cacheLimitGib: Number(e.target.value) })}>{[2, 5, 10, 20, 50].map(value => <option key={value} value={value}>{value} GB</option>)}</select></label></div><div className="cache-detail"><div className="storage-track"><i style={{ width: `${status ? Math.min(100, status.cacheBytes / status.cacheLimitBytes * 100) : 0}%` }} /></div><small>{status ? `${(status.cacheBytes / 1024 ** 3).toFixed(1)} GB used of ${Math.round(status.cacheLimitBytes / 1024 ** 3)} GB` : 'Cache usage unavailable'}</small></div><div className="settings-footer"><span>{desktop ? 'Cache preferences apply on this PC.' : 'Browser preview does not change local settings.'}</span><button className="button button-primary" onClick={save}>Save settings</button></div></section></div><p className="app-origin"><span className="eu-badge">Made in Europe</span> pCloud Vault {__APP_VERSION__} · free and open source (GPL-3.0) · not affiliated with pCloud AG</p></div>
 }

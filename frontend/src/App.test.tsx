@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import App from './App'
 import { resetDemo, runAction } from './api'
 import { invoke } from '@tauri-apps/api/core'
+import type { AppStatus } from './types'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/webviewWindow', () => ({ getCurrentWebviewWindow: () => ({ onDragDropEvent: () => Promise.resolve(() => undefined) }) }))
@@ -12,7 +13,7 @@ const nativeStatus = {
   cacheLimitBytes: 10 * 1024 ** 3, cacheBytes: 1 * 1024 ** 3,
   pendingCount: 0, lastSync: Date.now(), oauthClientId: 'client-id',
 }
-let nativeStatusForTest = { ...nativeStatus }
+let nativeStatusForTest: AppStatus = { ...nativeStatus }
 const nativeEntries = [
   { id: 'folder', name: 'Travel', parentId: null, kind: 'folder' as const, size: 0, modified: Date.now(), starred: false, pinned: false, trashed: false, syncState: 'synced' as const },
   { id: 'note', name: 'Notes.md', parentId: null, kind: 'file' as const, size: 1000, modified: Date.now(), starred: false, pinned: false, trashed: false, syncState: 'synced' as const },
@@ -193,6 +194,45 @@ describe('pCloud Vault interface', () => {
     expect(screen.queryByLabelText('Cache limit')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
     expect(screen.getByLabelText('Search files')).toHaveValue('')
+  })
+
+  it('guides a first start through connecting and creating a vault', async () => {
+    useNativeBridge()
+    localStorage.clear()
+    nativeStatusForTest = { ...nativeStatus, vaultExists: false, unlocked: false, connected: false, accountEmail: null, region: null }
+    const native = vi.mocked(invoke).getMockImplementation()!
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'connect_pcloud_web') { nativeStatusForTest = { ...nativeStatusForTest, connected: true, accountEmail: 'alex@example.com', region: 'eu' }; return { ...nativeStatusForTest } as never }
+      if (command === 'create_vault') { nativeStatusForTest = { ...nativeStatusForTest, vaultExists: true, unlocked: true }; return { ...nativeStatusForTest } as never }
+      return native(command, args)
+    })
+    render(<App />)
+    const wizard = await screen.findByRole('dialog', { name: 'Welcome to pCloud Vault' })
+    expect(wizard).toHaveTextContent('Made in Europe')
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Get started' }))
+    fireEvent.click(within(wizard).getByRole('button', { name: /Sign in on pCloud website/ }))
+    expect(await within(wizard).findByText('Connected')).toBeInTheDocument()
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Continue' }))
+    fireEvent.change(within(wizard).getByLabelText('Vault password'), { target: { value: 'long enough secret' } })
+    fireEvent.change(within(wizard).getByLabelText('Repeat password'), { target: { value: 'long enough secreT' } })
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Create vault' }))
+    expect(await within(wizard).findByText("The passwords don't match.")).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('create_vault', expect.anything())
+    fireEvent.change(within(wizard).getByLabelText('Repeat password'), { target: { value: 'long enough secret' } })
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Create vault' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('create_vault', { password: 'long enough secret', remember: true }))
+    expect(await within(wizard).findByText("You're all set")).toBeInTheDocument()
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Open my vault' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(localStorage.getItem('pcloud-vault.welcome-complete')).toBe('1')
+  })
+
+  it('does not show the guide when this PC already has a vault', async () => {
+    useNativeBridge()
+    localStorage.clear()
+    render(<App />)
+    expect(await screen.findByText('Notes.md')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Welcome to pCloud Vault' })).not.toBeInTheDocument()
   })
 
   it('requires twelve characters when creating a vault', async () => {
