@@ -39,7 +39,7 @@ describe('pCloud Vault interface', () => {
     expect(screen.getByText('Unencrypted')).toBeInTheDocument()
     expect(await screen.findByText('Project brief.pdf')).toBeInTheDocument()
     expect(screen.getByText('Sample data only — no cloud changes are made.')).toBeInTheDocument()
-    expect(screen.getByText('Cached files stay encrypted on this PC.')).toBeInTheDocument()
+    expect(screen.getByText('Cached files stay encrypted on this computer.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Available offline' }).querySelector('.nav-count')).toBeNull()
   })
 
@@ -114,7 +114,7 @@ describe('pCloud Vault interface', () => {
     const newPassword = screen.getByLabelText('New password') as HTMLInputElement
     expect(newPassword.minLength).toBe(12)
     expect(screen.getByRole('dialog')).toHaveTextContent('does not re-encrypt every file')
-    expect(screen.getByRole('dialog')).toHaveTextContent('Trusted PCs')
+    expect(screen.getByRole('dialog')).toHaveTextContent('Trusted computers')
   })
 
   it('signs in on the pCloud website without needing an OAuth client ID', async () => {
@@ -229,7 +229,7 @@ describe('pCloud Vault interface', () => {
     expect(document.querySelector('main')).not.toHaveAttribute('inert')
   })
 
-  it('does not show the guide when this PC already has a vault', async () => {
+  it('does not show the guide when this computer already has a vault', async () => {
     useNativeBridge()
     localStorage.clear()
     render(<App />)

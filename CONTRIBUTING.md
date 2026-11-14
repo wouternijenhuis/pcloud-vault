@@ -10,7 +10,11 @@ Thanks for helping. This is a small, security-sensitive project, so changes favo
 
 ## Development setup
 
-Requirements: Windows 11 x64, Rust stable with the MSVC build tools, Node.js 22 or later, pnpm, and WebView2 (included with Windows 11).
+Requirements: Rust stable, Node.js 22 or later and pnpm, plus per platform:
+
+- **Windows 11 x64:** the MSVC build tools. WebView2 is included with Windows 11.
+- **macOS 11+:** the Xcode command-line tools.
+- **Linux:** the [Tauri system packages](https://v2.tauri.app/start/prerequisites/#linux), for example on Debian/Ubuntu `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev`, and a Secret Service keyring for saved sign-ins.
 
 ```powershell
 git config core.hooksPath .githooks   # public-safety checks before commit and push
@@ -22,7 +26,7 @@ pnpm preview                          # browser demo with sample data (no cloud 
 
 ## Checks
 
-Run these before opening a pull request. CI runs the same checks on ready pull requests.
+Run these before opening a pull request. CI runs the same checks on Windows, Linux and macOS for ready pull requests.
 
 ```powershell
 cargo fmt --all -- --check

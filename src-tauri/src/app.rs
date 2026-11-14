@@ -37,7 +37,7 @@ pub(crate) struct Settings {
     /// former `diffCursor`, so the first sync after upgrading does a full listing.
     pub object_cursor: Option<u64>,
     pub last_sync: Option<u64>,
-    /// Salts of password wrappers this PC has superseded; never adopted again.
+    /// Salts of password wrappers this computer has superseded; never adopted again.
     pub retired_header_salts: Vec<String>,
 }
 impl Default for Settings {
@@ -209,7 +209,8 @@ impl Inner {
                 serde_json::to_vec(&(vault.vault_id(), vault.key_bytes()))
                     .map_err(|e| e.to_string())?,
             );
-            let protected = pcloud_api::dpapi::protect(&bytes).map_err(|e| e.to_string())?;
+            let protected =
+                pcloud_api::device_protection::protect(&bytes).map_err(|e| e.to_string())?;
             atomic_write(&path, &protected)?;
         } else if path.exists() {
             fs::remove_file(path).map_err(|e| e.to_string())?;
@@ -219,16 +220,22 @@ impl Inner {
     }
 }
 
+/// Starts the app in the background at sign-in while a device is remembered.
 fn set_startup(enabled: bool) -> AppResult<()> {
     if std::env::args().any(|arg| arg == "--data-dir") {
         return Ok(());
     }
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    set_platform_startup(enabled, &executable)
+}
+
+#[cfg(windows)]
+fn set_platform_startup(enabled: bool, executable: &Path) -> AppResult<()> {
     let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
         .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
         .map_err(|e| e.to_string())?
         .0;
     if enabled {
-        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
         key.set_value(
             "pCloudVault",
             &format!("\"{}\" --background", executable.display()),
@@ -242,6 +249,90 @@ fn set_startup(enabled: bool) -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+/// Linux: an XDG autostart entry. macOS: a per-user LaunchAgent.
+#[cfg(not(windows))]
+fn set_platform_startup(enabled: bool, executable: &Path) -> AppResult<()> {
+    let (path, contents) = startup_entry(executable)?;
+    if enabled {
+        atomic_write(&path, contents.as_bytes())
+    } else {
+        match fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn startup_entry(executable: &Path) -> AppResult<(PathBuf, String)> {
+    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+    let escape = |text: &str| {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    };
+    let contents = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+  <key>Label</key><string>dev.pcloudvault.desktop</string>
+  <key>ProgramArguments</key><array><string>{}</string><string>--background</string></array>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+",
+        escape(&executable.to_string_lossy())
+    );
+    Ok((
+        PathBuf::from(home).join("Library/LaunchAgents/dev.pcloudvault.desktop.plist"),
+        contents,
+    ))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn startup_entry(executable: &Path) -> AppResult<(PathBuf, String)> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .ok_or("HOME is not set")?;
+    // An AppImage runs from a temporary mount; start the AppImage file itself instead.
+    let executable = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| executable.to_path_buf());
+    let quoted = desktop_exec_quote(&executable.to_string_lossy());
+    let contents = format!(
+        "[Desktop Entry]
+Type=Application
+Name=pCloud Vault
+Exec=\"{quoted}\" --background
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+"
+    );
+    Ok((config.join("autostart/pcloud-vault.desktop"), contents))
+}
+
+/// Quotes one Exec argument for a Desktop Entry: `\`, `"`, `` ` `` and `$` get a
+/// backslash inside the double quotes, `%` doubles, and the value's string escaping
+/// then doubles every backslash.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn desktop_exec_quote(argument: &str) -> String {
+    let mut exec_escaped = String::new();
+    for c in argument.chars() {
+        match c {
+            '\\' | '"' | '`' | '$' => {
+                exec_escaped.push('\\');
+                exec_escaped.push(c);
+            }
+            '%' => exec_escaped.push_str("%%"),
+            _ => exec_escaped.push(c),
+        }
+    }
+    exec_escaped.replace('\\', "\\\\")
 }
 
 async fn task<T: Send + 'static>(
@@ -277,7 +368,7 @@ async fn create_vault(
         s.remember(&vault, remember)?;
         *current = Some(vault);
         drop(current);
-        s.log("Private vault created. Files are encrypted before leaving this PC.", "success");
+        s.log("Private vault created. Files are encrypted before leaving this computer.", "success");
         let result = s.status();
         let sync_state = s.clone();
         std::thread::spawn(move || { if let Err(e) = replication::sync(&sync_state) { sync_state.log(&e, "error"); } });
@@ -297,7 +388,7 @@ async fn unlock_vault(
             .map_err(|_| "Unable to unlock. Check the password and vault integrity.".to_string())?;
         s.remember(&vault, remember)?;
         *locked(&s.vault)? = Some(vault);
-        s.log("Vault unlocked on this PC.", "success");
+        s.log("Vault unlocked on this computer.", "success");
         if let Err(error) = replication::sync(&s) {
             s.log(&error, "error");
         }
@@ -334,7 +425,7 @@ async fn forget_device(state: State<'_, AppState>) -> AppResult<AppStatus> {
         *locked(&s.account)? = None;
         set_startup(false)?;
         s.log(
-            "Saved keys and pCloud sign-in removed from this PC.",
+            "Saved keys and pCloud sign-in removed from this computer.",
             "info",
         );
         s.status()
@@ -472,19 +563,19 @@ fn end_web_session(s: &Inner, account: Account) {
     }
 }
 
-/// Saves a verified account with DPAPI and connects the remote vault.
+/// Saves a verified account with device protection and connects the remote vault.
 fn finish_connect(s: &Arc<Inner>, account: pcloud_api::Account) -> AppResult<AppStatus> {
     let previous = locked(&s.account)?.clone();
     if let Some(previous) = &previous {
         if previous.user_id != account.user_id {
             end_web_session(s, account);
-            return Err("Forget this PC before switching pCloud accounts. The local vault will be preserved.".into());
+            return Err("Forget this computer before switching pCloud accounts. The local vault will be preserved.".into());
         }
     }
     let bytes = Zeroizing::new(serde_json::to_vec(&account).map_err(|e| e.to_string())?);
     atomic_write(
         &s.directory.join("account.key"),
-        &pcloud_api::dpapi::protect(&bytes).map_err(|e| e.to_string())?,
+        &pcloud_api::device_protection::protect(&bytes).map_err(|e| e.to_string())?,
     )?;
     let replaced = previous.filter(|previous| previous.token != account.token);
     *locked(&s.account)? = Some(account);
@@ -837,9 +928,8 @@ fn import_local(s: &Arc<Inner>, paths: Vec<PathBuf>, parent: Option<String>) -> 
         .map(|path| {
             let path = fs::canonicalize(path).map_err(|e| e.to_string())?;
             outside_storage(s, &path)?;
-            let storage = fs::canonicalize(&s.directory).map_err(|e| e.to_string())?.to_string_lossy().to_lowercase();
-            let source = path.to_string_lossy().to_lowercase();
-            if storage.starts_with(&format!("{source}\\")) { return Err("This folder contains the client's encrypted storage. Select a narrower source folder to prevent importing the vault into itself.".into()); }
+            let storage = fs::canonicalize(&s.directory).map_err(|e| e.to_string())?;
+            if path_key(&storage).starts_with(path_key(&path)) { return Err("This folder contains the client's encrypted storage. Select a narrower source folder to prevent importing the vault into itself.".into()); }
             Ok(path)
         })
         .collect::<AppResult<Vec<_>>>()?;
@@ -858,7 +948,7 @@ fn import_local(s: &Arc<Inner>, paths: Vec<PathBuf>, parent: Option<String>) -> 
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or("Invalid Windows filename")?;
+            .ok_or("Invalid filename")?;
         if metadata.is_dir() {
             let folder = vault
                 .create_folder(parent, name)
@@ -890,6 +980,16 @@ fn import_local(s: &Arc<Inner>, paths: Vec<PathBuf>, parent: Option<String>) -> 
     Ok(())
 }
 
+/// Canonical path for containment checks. Windows and macOS file systems are
+/// case-insensitive by default, so compare those case-insensitively.
+fn path_key(path: &Path) -> PathBuf {
+    if cfg!(any(windows, target_os = "macos")) {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
+}
+
 fn outside_storage(s: &Inner, path: &Path) -> AppResult<()> {
     let candidate = if path.exists() {
         fs::canonicalize(path).map_err(|e| e.to_string())?
@@ -899,9 +999,7 @@ fn outside_storage(s: &Inner, path: &Path) -> AppResult<()> {
             .join(path.file_name().ok_or("Invalid output filename")?)
     };
     let storage = fs::canonicalize(&s.directory).map_err(|e| e.to_string())?;
-    let candidate = candidate.to_string_lossy().to_lowercase();
-    let storage = storage.to_string_lossy().to_lowercase();
-    if candidate == storage || candidate.starts_with(&format!("{storage}\\")) {
+    if path_key(&candidate).starts_with(path_key(&storage)) {
         return Err(
             "Choose a location outside this client's encrypted application storage.".into(),
         );
@@ -1080,7 +1178,7 @@ async fn open_entry(state: State<'_, AppState>, location: String, id: String) ->
             return Ok(());
         };
         open::that(path).map_err(|_| {
-            "Windows could not open this file with its default application.".to_string()
+            "Your system could not open this file with its default application.".to_string()
         })
     })
     .await
@@ -1174,9 +1272,9 @@ async fn change_password(
             // wrapper must not outlive this vault and be replayed over a different one later.
             fs::remove_file(s.directory.join("pending-header.json")).map_err(|e| e.to_string())?;
         } else {
-            if let Err(error) = replication::publish_header(&s) { s.log("Password changed locally; the encrypted cloud update is pending and will retry automatically.", "info"); return Err(format!("Password changed on this PC. Cloud update is pending: {error}")); }
+            if let Err(error) = replication::publish_header(&s) { s.log("Password changed locally; the encrypted cloud update is pending and will retry automatically.", "info"); return Err(format!("Password changed on this computer. Cloud update is pending: {error}")); }
         }
-        s.log("Vault password changed. Already trusted PCs retain their keys.", "success"); Ok(())
+        s.log("Vault password changed. Already trusted computers retain their keys.", "success"); Ok(())
     }).await
 }
 #[tauri::command]
@@ -1264,7 +1362,7 @@ pub fn run() {
                 .unwrap_or_default();
             let account = fs::read(directory.join("account.key"))
                 .ok()
-                .and_then(|bytes| pcloud_api::dpapi::unprotect(&bytes).ok())
+                .and_then(|bytes| pcloud_api::device_protection::unprotect(&bytes).ok())
                 .map(Zeroizing::new)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok());
             let inner = Arc::new(Inner {
@@ -1277,7 +1375,7 @@ pub fn run() {
                 in_use: Mutex::default(),
             });
             if let Ok(blob) = fs::read(inner.directory.join("device.key")) {
-                if let Ok(bytes) = pcloud_api::dpapi::unprotect(&blob) {
+                if let Ok(bytes) = pcloud_api::device_protection::unprotect(&blob) {
                     let bytes = Zeroizing::new(bytes);
                     if let Ok((id, key)) = serde_json::from_slice::<(String, [u8; 32])>(&bytes) {
                         let key = Zeroizing::new(key);
@@ -1374,13 +1472,41 @@ pub fn run() {
             export_recovery,
             get_activity
         ])
-        .run(tauri::generate_context!())
-        .expect("Unable to start pCloud Vault");
+        .build(tauri::generate_context!())
+        .expect("Unable to start pCloud Vault")
+        .run(|_app, _event| {
+            // macOS: clicking the Dock icon shows the window that closing hid.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                if let Some(window) = _app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_entry_exec_arguments_are_quoted() {
+        assert_eq!(
+            desktop_exec_quote("/opt/pCloud Vault/app"),
+            "/opt/pCloud Vault/app"
+        );
+        // Exec quoting adds one backslash; Desktop Entry string escaping doubles it.
+        assert_eq!(desktop_exec_quote(r#"/a"b"#), r#"/a\\"b"#);
+        assert_eq!(desktop_exec_quote("/a$b`c"), r"/a\\$b\\`c");
+        assert_eq!(desktop_exec_quote(r"/a\b"), r"/a\\\\b");
+        assert_eq!(desktop_exec_quote("/100%"), "/100%%");
+    }
+    #[test]
+    fn storage_containment_compares_whole_path_components() {
+        let storage = Path::new("/data/vault");
+        assert!(path_key(Path::new("/data/vault/objects")).starts_with(path_key(storage)));
+        assert!(!path_key(Path::new("/data/vault-export")).starts_with(path_key(storage)));
+    }
     fn fixture() -> (tempfile::TempDir, Arc<Inner>) {
         let directory = tempfile::tempdir().unwrap();
         let inner = Arc::new(Inner {

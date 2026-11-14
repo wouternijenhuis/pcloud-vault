@@ -5,7 +5,7 @@ The final user-selected scope is a standalone Windows client. The initial mounte
 ## Boundaries
 
 - `vault-core`: encryption, authenticated headers and chunks, file operations, durable object/journal storage, per-PC pins, deterministic causal merge and conflict preservation.
-- `pcloud-api`: regional HTTPS API transport, browser OAuth callback, immutable upload/read-back verification and current-user DPAPI.
+- `pcloud-api`: regional HTTPS API transport, browser OAuth callback, immutable upload/read-back verification and per-user device secret protection (Windows DPAPI; elsewhere XChaCha20-Poly1305 under a device key in the Keychain or Secret Service).
 - `src-tauri`: restricted local IPC, secret persistence, transfer orchestration, import/export dialogs, encrypted cache hydration, tray lifecycle and startup.
 - `frontend`: bundled React/TypeScript interface. Browser-only sample mode is labeled; native operations use typed IPC and surface backend errors.
 - `vault-cli`: independent verification, decrypted export and cloud-layout hydration.
