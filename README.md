@@ -33,7 +33,7 @@ gh attestation verify pCloud-Vault-0.1.0-windows-x64.zip --repo wouternijenhuis/
 
 - **End-to-end encrypted vault.** Files, file names and folders are encrypted on your PC before upload.
 - **Your existing pCloud files.** Browse, rename, move, download and trash them in the same app.
-- **Sign in on pCloud's own website**, including two-step verification and Google, Apple or Facebook sign-in. Your pCloud password never passes through this app.
+- **Sign in on pCloud's own website**, including two-step verification and Google, Apple or Facebook sign-in. The app never reads or stores your pCloud password.
 - **Several PCs.** Sign in on another PC, enter your vault password once, and your vault follows you. Simultaneous edits are kept as conflict copies, never silently overwritten.
 - **Offline access.** Keep files offline, with an encrypted local cache (10 GiB by default).
 - **Everyday comfort:** a welcome guide, drag and drop, right-click menus, search, image previews, favorites, trash and restore, light and dark themes.

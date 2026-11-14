@@ -209,6 +209,7 @@ describe('pCloud Vault interface', () => {
     render(<App />)
     const wizard = await screen.findByRole('dialog', { name: 'Welcome to pCloud Vault' })
     expect(wizard).toHaveTextContent('Made in Europe')
+    await waitFor(() => expect(document.querySelector('main')).toHaveAttribute('inert'))
     fireEvent.click(within(wizard).getByRole('button', { name: 'Get started' }))
     fireEvent.click(within(wizard).getByRole('button', { name: /Sign in on pCloud website/ }))
     expect(await within(wizard).findByText('Connected')).toBeInTheDocument()
@@ -225,6 +226,7 @@ describe('pCloud Vault interface', () => {
     fireEvent.click(within(wizard).getByRole('button', { name: 'Open my vault' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(localStorage.getItem('pcloud-vault.welcome-complete')).toBe('1')
+    expect(document.querySelector('main')).not.toHaveAttribute('inert')
   })
 
   it('does not show the guide when this PC already has a vault', async () => {

@@ -17,6 +17,8 @@ concurrency:
 jobs:
   version:
     name: Check version
+    # Releases come from main only, including manual runs.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -60,18 +62,15 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      - name: Install dependencies
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm --dir frontend install --frozen-lockfile
-      - name: Test
-        run: |
-          cargo test --workspace --locked
-          pnpm --dir frontend test
-      - name: Build app, installer and recovery tool
-        run: |
-          pnpm build
-          cargo build --release --locked -p vault-cli
+      # One command per step: a multi-line pwsh step only fails on its last command.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir frontend install --frozen-lockfile
+      - run: cargo test --workspace --locked
+      - run: pnpm --dir frontend test
+      - name: Build app and installer
+        run: pnpm build
+      - name: Build recovery tool
+        run: cargo build --release --locked -p vault-cli
 
       - name: Assemble release files
         shell: pwsh

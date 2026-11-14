@@ -26,7 +26,8 @@ export function WelcomeWizard({ status, busy, error, connect, createVault, unloc
   const body = useRef<HTMLDivElement>(null)
   const unlocking = status.vaultExists
 
-  useEffect(() => { body.current?.querySelector<HTMLElement>('input, button.button-primary')?.focus() }, [step])
+  // Move focus into each step, and again when signing in replaces the focused button.
+  useEffect(() => { body.current?.querySelector<HTMLElement>('input, button.button-primary')?.focus() }, [step, status.connected])
   useEffect(() => { if (step === 2 && status.unlocked) setStep(3) }, [step, status.unlocked])
 
   const submitVault = async (event: FormEvent<HTMLFormElement>) => {
@@ -61,7 +62,7 @@ export function WelcomeWizard({ status, busy, error, connect, createVault, unloc
 
         {step === 1 && <>
           <h2 id="wizard-title">Connect your pCloud account</h2>
-          <p className="wizard-lead">Sign in on pCloud's own page. Your pCloud password and two-step verification never pass through this app.</p>
+          <p className="wizard-lead">Sign in on pCloud's own page. This app never reads or stores your pCloud password or two-step codes.</p>
           {status.connected
             ? <div className="wizard-connected"><Check size={17} /><div><strong>Connected</strong><span>{status.accountEmail ?? 'Your pCloud account'}{status.region ? ` · ${status.region.toUpperCase()} region` : ''}</span></div></div>
             : <button className="button button-primary wizard-wide" onClick={() => void connect()} disabled={busy}><Globe size={16} /> {busy ? 'Waiting for pCloud sign-in…' : 'Sign in on pCloud website'}</button>}

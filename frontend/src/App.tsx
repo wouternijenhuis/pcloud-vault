@@ -208,6 +208,10 @@ export default function App() {
     setPassword(''); setFormName(''); setModal(null); setCurrent(null)
   }
   useEffect(() => { if (status && wizard === null) setWizard(desktop && !status.vaultExists && !welcomeCompleted()) }, [status, wizard, desktop])
+  // While the guide is open, the app behind it cannot be focused or clicked.
+  useEffect(() => {
+    document.querySelectorAll('.app-shell > aside, .app-shell > main').forEach(element => element.toggleAttribute('inert', !!wizard))
+  }, [wizard])
   const finishWizard = () => {
     try { localStorage.setItem(WELCOME_KEY, '1') } catch { /* the guide simply shows again next time */ }
     setError(''); setWizard(false)
