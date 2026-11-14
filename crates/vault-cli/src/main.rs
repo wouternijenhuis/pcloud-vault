@@ -40,10 +40,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })?)
     };
     let vault = if recovery {
-        Vault::open_with_recovery(root, &secret)?
+        Vault::open_with_recovery(root, &secret)
     } else {
-        Vault::open(root, &secret)?
-    };
+        Vault::open(root, &secret)
+    }
+    .map_err(|error| format!("Could not open the vault at {}: {error}", root.display()))?;
     let entries = vault.all_entries();
     let destination = if args[0] == "export" {
         let path = PathBuf::from(
@@ -57,7 +58,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .into(),
             );
         }
-        std::fs::create_dir_all(&path)?;
+        std::fs::create_dir_all(&path).map_err(|error| {
+            format!(
+                "Could not create the output folder {}: {error}",
+                path.display()
+            )
+        })?;
         Some(path)
     } else {
         None
@@ -98,7 +104,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                vault.export_file(&entry.id, &path)?;
+                vault
+                    .export_file(&entry.id, &path)
+                    .map_err(|error| format!("Could not export {}: {error}", path.display()))?;
                 verified += 1;
             }
         } else if !is_folder {

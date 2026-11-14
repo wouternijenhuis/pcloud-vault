@@ -35,7 +35,7 @@ The separate `vault-recovery.exe` verifies or exports a complete local/downloade
 
 Secrets are prompted interactively, never supplied as command-line arguments. For automation, `--password-stdin` explicitly reads one secret line from a pipe. Do not put real secrets into shell history.
 
-Cloud layout is `.pcloud-vault/vault.json` plus `objects/c-<id>.obj`, `m-<id>.obj`, and `h-<id>.obj`. The prefixes distinguish ciphertext chunks, manifests, and history without revealing original names. Download the whole `.pcloud-vault` directory before offline recovery, then normalize its layout:
+Cloud layout is `.pcloud-vault/vault.json` plus `objects/c-<id>.obj`, `m-<id>.obj`, and `h-<id>.obj`. pCloud's own website and apps hide this dot-folder, so files you add to Private Vault never appear in pCloud under their real names; see them in this app. The prefixes distinguish ciphertext chunks, manifests, and history without revealing original names. Download the whole `.pcloud-vault` directory before offline recovery, then normalize its layout:
 
 ```powershell
 .\vault-recovery.exe hydrate 'D:\DownloadedCloudVault' 'D:\NewEncryptedReplica'

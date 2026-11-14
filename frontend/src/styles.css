@@ -66,3 +66,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, [role="button"]
 .dark .connect-alternative summary { color: #b0b7ca; }
 .dialog-error { margin: 0 0 12px; padding: 9px 11px; border: 1px solid #f0d6d9; border-radius: 7px; background: #fdf3f4; color: #a8505c; font-size: 10px; line-height: 1.5; }
 .dark .dialog-error { border-color: #5a3640; background: #3a2930; color: #f0b9c0; }
+.context-menu { position: fixed; z-index: 40; min-width: 190px; padding: 5px; border: 1px solid #e3e6ee; border-radius: 9px; background: #fff; box-shadow: 0 12px 36px #1f26442b; animation: fade-in .08s ease-out; }
+.context-menu [role="menuitem"] { width: 100%; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 6px; padding: 7px 9px; background: transparent; color: #4f5568; font-size: 11px; text-align: left; }
+.context-menu [role="menuitem"] svg { flex: none; color: #8a90a6; }
+.context-menu [role="menuitem"]:hover, .context-menu [role="menuitem"]:focus-visible { outline: none; background: #f1f2ff; color: #3f4cb0; }
+.context-menu [role="menuitem"].danger { color: #b9505e; }
+.context-menu [role="menuitem"].danger svg { color: #c65c69; }
+.context-menu [role="menuitem"].danger:hover, .context-menu [role="menuitem"].danger:focus-visible { background: #fdf2f3; }
+.dark .context-menu { background: #262b3f; border-color: #3a4055; box-shadow: 0 12px 36px #00000059; }
+.dark .context-menu [role="menuitem"] { color: #d5d9e7; }
+.dark .context-menu [role="menuitem"]:hover, .dark .context-menu [role="menuitem"]:focus-visible { background: #313754; color: #fff; }

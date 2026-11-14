@@ -6,6 +6,7 @@ import {
   ShieldCheck, Star, Sun, Trash2, Upload, Wifi, X,
 } from 'lucide-react'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { Dialog } from './components/Dialog'
 import { getActivity, getStatus, importDemoFiles, importPaths, isDesktop, listEntries, previewEntry, runAction } from './api'
 import type { ActionArguments, Activity, AppStatus, Entry, Location, View } from './types'
@@ -40,6 +41,7 @@ export default function App() {
   const [modal, setModal] = useState<Modal>(null)
   const [selected, setSelected] = useState<string[]>([])
   const [current, setCurrent] = useState<Entry | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; entry: Entry } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
@@ -127,7 +129,9 @@ export default function App() {
   const folder = path.at(-1) ?? null
   const filteredEntries = entries
   const allFolders = entries.filter(item => item.kind === 'folder')
-  const activeEntry = current ?? entries.find(item => item.id === selected[0]) ?? null
+  // The selection drives the selection bar; `current` only pins the item an open dialog acts on.
+  const selectedEntry = entries.find(item => item.id === selected[0]) ?? null
+  const activeEntry = current ?? selectedEntry
   const openFolder = (entry: Entry) => { if (entry.kind === 'folder') { entriesRequest.current++; setPath(items => [...items, entry]); setParentId(entry.id); setEntries([]); setSelected([]) } else void showPreview(entry) }
   const showPreview = async (entry: Entry) => {
     const request = ++previewRequest.current
@@ -137,7 +141,38 @@ export default function App() {
       catch { if (request === previewRequest.current) setPreview(null) }
     }
   }
-  const selectEntry = (entry: Entry, event: React.MouseEvent) => { if (location === 'vault' && (event.ctrlKey || event.metaKey)) setSelected(value => value.includes(entry.id) ? value.filter(id => id !== entry.id) : [...value, entry.id]); else setSelected(value => value.length === 1 && value[0] === entry.id ? [] : [entry.id]) }
+  const selectEntry = (entry: Entry, event: React.MouseEvent) => { setCurrent(null); if (location === 'vault' && (event.ctrlKey || event.metaKey)) setSelected(value => value.includes(entry.id) ? value.filter(id => id !== entry.id) : [...value, entry.id]); else setSelected(value => value.length === 1 && value[0] === entry.id ? [] : [entry.id]) }
+  /** One action list for the selection bar and the right-click menu, so both always match. */
+  const entryActions = (entry: Entry | null, count: number): MenuItem[] => {
+    if (!entry) return []
+    const exportCopy: MenuItem[] = count === 1 ? [{ label: 'Export copy', icon: <ArrowDownToLine size={15} />, run: () => void exportEntry(entry) }] : []
+    if (location === 'cloud') return [...exportCopy, ...(count === 1 && entry.kind === 'file' ? [{ label: 'Import to vault', icon: <LockKeyhole size={15} />, run: () => void perform('import_cloud_file', { id: entry.id, parentId: null }, 'File imported to Private Vault') }] : [])]
+    if (view === 'trash') return [{ label: 'Restore', run: () => void perform('restore_entry', { location, id: entry.id }, 'Item restored') }]
+    return [
+      ...exportCopy,
+      { label: 'Rename', run: () => { setCurrent(entry); setFormName(entry.name); setModal('rename') } },
+      { label: 'Move', run: () => { setCurrent(entry); setFormName(''); setModal('move') } },
+      { label: 'Favorite', icon: <Star size={15} />, run: () => void perform('toggle_favorite', { id: entry.id }, 'Favorite updated') },
+      { label: 'Offline', icon: <HardDrive size={15} />, run: () => void perform('toggle_pin', { id: entry.id }, 'Offline access updated') },
+      { label: 'Move to trash', icon: <Trash2 size={15} />, danger: true, run: () => { setCurrent(entry); setModal('delete') } },
+    ]
+  }
+  const menuItems = (entry: Entry): MenuItem[] => {
+    const open: MenuItem = { label: entry.kind === 'folder' ? 'Open' : 'Preview', icon: entry.kind === 'folder' ? <Folder size={15} /> : <Image size={15} />, run: () => openFolder(entry) }
+    const labels: Record<string, string> = {
+      Favorite: entry.starred ? 'Remove from favorites' : 'Add to favorites',
+      Offline: entry.pinned ? 'Remove offline copy' : 'Keep offline',
+    }
+    return [...(view === 'trash' ? [] : [open]), ...entryActions(entry, 1).map(item => ({ ...item, label: labels[item.label] ?? item.label }))]
+  }
+  const openMenu = (entry: Entry, x: number, y: number) => { setCurrent(null); setSelected([entry.id]); setMenu({ x, y, entry }) }
+  const closeMenu = useCallback(() => setMenu(null), [])
+  useEffect(() => {
+    // The WebView's own menu (Back, Refresh, Print…) does not belong in a desktop app; keep it for text fields.
+    const suppress = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest('input, textarea, [contenteditable="true"]')) event.preventDefault() }
+    document.addEventListener('contextmenu', suppress)
+    return () => document.removeEventListener('contextmenu', suppress)
+  }, [])
   const doImport = async (files: FileList | null) => { if (!files?.length || location !== 'vault') return; setBusy(true); try { await importDemoFiles(Array.from(files), parentId); announce(`${files.length} file${files.length > 1 ? 's' : ''} added to demo`); await refreshEntries() } catch (e) { setError(String(e)) } finally { setBusy(false); if (fileInput.current) fileInput.current.value = '' } }
   const browseFiles = async () => {
     if (location !== 'vault' || busy) return
@@ -162,13 +197,13 @@ export default function App() {
     if (modal === 'unlock') await perform('unlock_vault', { password, remember }, 'Vault unlocked')
     if (modal === 'password') await perform('change_password', { oldPassword: formName, newPassword: password }, 'Password changed')
     if (modal === 'connect') await perform('connect_pcloud', { clientId: settings.clientId }, 'pCloud connected')
-    setPassword(''); setFormName(''); setModal(null)
+    setPassword(''); setFormName(''); setModal(null); setCurrent(null)
   }
   const connectWeb = async () => {
     if (!desktop) { announce('Website sign-in is available in the Windows app'); return }
     if (await perform('connect_pcloud_web', {}, 'pCloud connected')) setModal(null)
   }
-  const modalClose = useCallback(() => { if (!busy) setModal(null) }, [busy])
+  const modalClose = useCallback(() => { if (!busy) { setModal(null); setCurrent(null) } }, [busy])
   const moveNavigation = (item: View) => { entriesRequest.current++; setView(item); if (item === 'favorites' || item === 'offline' || item === 'trash') setLocation('vault'); setParentId(null); setPath([]); setEntries([]); setSelected([]); if (item !== 'settings') setQuery('') }
   const switchWorkspace = (next: Location) => { entriesRequest.current++; setLocation(next); setView('files'); setParentId(null); setPath([]); setEntries([]); setSelected([]); setQuery('') }
   const goToRoot = () => { entriesRequest.current++; setParentId(null); setPath([]); setEntries([]); setSelected([]) }
@@ -200,10 +235,10 @@ export default function App() {
           {view === 'files' && location === 'cloud' && !status.connected ? <CloudGate connect={() => setModal('connect')} /> : vaultLibraryView && location === 'vault' && status.vaultExists && !unlocked ? <UnlockGate unlock={() => setModal('unlock')} /> : vaultLibraryView && location === 'vault' && !status.vaultExists && !localOnly ? <SetupGate connected={status.connected} connect={() => setModal('connect')} create={() => { setModal('create') }} workLocally={() => setLocalOnly(true)} /> : <>
           {view === 'files' && <div className="welcome-row"><div><p className="eyebrow">{location === 'vault' ? <><LockKeyhole size={13} /> ENCRYPTED ON THIS PC</> : <><Cloud size={13} /> CONNECTED STORAGE</>}</p><h2>{greeting}</h2><p>{location === 'vault' ? 'Anything you place here is protected with your vault password.' : 'Browse and manage your pCloud files from one calm place.'}</p></div><button className="text-action" onClick={() => setGrid(!grid)}>{grid ? <><LayoutList size={16} /> List view</> : <><Grid2X2 size={16} /> Grid view</>}</button></div>}
           <div className="content-head"><div><h2>{view === 'files' ? (parentId ? folder?.name ?? 'Folder' : location === 'vault' ? 'Your vault' : 'Your pCloud') : title}</h2><p>{view === 'trash' ? 'Items in the trash can be restored or removed forever.' : `${filteredEntries.length} ${filteredEntries.length === 1 ? 'item' : 'items'}${query ? ` matching “${query}”` : ''}`}</p></div><div className="view-switch" aria-label="Display mode"><button className={!grid ? 'active' : ''} aria-label="List view" onClick={() => setGrid(false)}><LayoutList size={16} /></button><button className={grid ? 'active' : ''} aria-label="Grid view" onClick={() => setGrid(true)}><Grid2X2 size={16} /></button></div></div>
-          {selected.length > 0 && <div className="selection-bar"><span>{selected.length} selected</span>{location === 'cloud' ? <>{selected.length === 1 && activeEntry && <button onClick={() => void exportEntry(activeEntry)}><ArrowDownToLine size={15} /> Export copy</button>}{selected.length === 1 && activeEntry?.kind === 'file' && <button onClick={() => activeEntry && void perform('import_cloud_file', { id: activeEntry.id, parentId: null }, 'File imported to Private Vault')}><LockKeyhole size={15} /> Import to vault</button>}{activeEntry && activeEntry.kind !== 'file' && <small>Open a file to import it into your vault.</small>}</> : view === 'trash' ? <button onClick={() => activeEntry && void perform('restore_entry', { location, id: activeEntry.id }, 'Item restored')}>Restore</button> : <>{selected.length === 1 && activeEntry && <button onClick={() => void exportEntry(activeEntry)}><ArrowDownToLine size={15} /> Export copy</button>}<button onClick={() => { setCurrent(activeEntry); setFormName(activeEntry?.name ?? ''); setModal('rename') }}>Rename</button><button onClick={() => { setCurrent(activeEntry); setFormName(''); setModal('move') }}>Move</button><button onClick={() => activeEntry && void perform('toggle_favorite', { id: activeEntry.id }, 'Favorite updated')}><Star size={15} /> Favorite</button><button onClick={() => activeEntry && void perform('toggle_pin', { id: activeEntry.id }, 'Offline access updated')}><HardDrive size={15} /> Offline</button><button onClick={() => { setCurrent(activeEntry); setModal('delete') }} className="remove-action"><Trash2 size={15} /> Move to trash</button></>}<button className="icon-button" onClick={() => setSelected([])} aria-label="Clear selection"><X size={16} /></button></div>}
+          {selected.length > 0 && <div className="selection-bar"><span>{selected.length} selected</span>{entryActions(selectedEntry, selected.length).map(item => <button key={item.label} onClick={item.run} className={item.danger ? 'remove-action' : undefined}>{item.icon}{item.icon ? ' ' : ''}{item.label}</button>)}{location === 'cloud' && selectedEntry && selectedEntry.kind !== 'file' && <small>Open a file to import it into your vault.</small>}<button className="icon-button" onClick={() => setSelected([])} aria-label="Clear selection"><X size={16} /></button></div>}
           {filteredEntries.length === 0 ? <EmptyState view={view} query={query} allowUpload={location === 'vault'} create={() => { setFormName(''); setModal('new') }} upload={() => void browseFiles()} /> : <div className={grid ? 'files-grid' : 'files-table-wrap'}>
             {!grid && <div className="table-header"><span>Name</span><span>Last modified</span><span>Size</span><span aria-label="Actions" /></div>}
-            {filteredEntries.map(entry => <FileRow key={entry.id} entry={entry} grid={grid} selected={selected.includes(entry.id)} onSelect={e => selectEntry(entry, e)} onOpen={() => openFolder(entry)} view={view} />)}
+            {filteredEntries.map(entry => <FileRow key={entry.id} entry={entry} grid={grid} selected={selected.includes(entry.id)} onSelect={e => selectEntry(entry, e)} onOpen={() => openFolder(entry)} onMenu={(x, y) => openMenu(entry, x, y)} view={view} />)}
           </div>}
           {location === 'vault' ? <div className="drop-hint"><Upload size={15} /><span>Drop files here to add them to your vault.</span><button onClick={() => void browseFiles()} disabled={busy}>Browse files</button>{!desktop && <input ref={fileInput} type="file" multiple hidden onChange={e => void doImport(e.target.files)} />}</div> : <div className="drop-hint"><LockKeyhole size={15} /><span>Select a cloud file to import a copy into your private vault.</span></div>}
           </>}
@@ -212,6 +247,7 @@ export default function App() {
       <footer className="statusbar"><div><span className="status-online" />{status?.connected ? 'pCloud connected' : 'Local only'}</div><div>{status?.connected && status.unlocked ? status.pendingCount ? `${status.pendingCount} changes waiting` : 'All changes synced' : 'Sync status unavailable'}<span className="status-sep">·</span>Last sync {status?.connected && status.unlocked && status.lastSync ? timeLabel(status.lastSync) : '—'}</div></footer>
     </main>
 
+    {menu && <ContextMenu x={menu.x} y={menu.y} label={`Actions for ${menu.entry.name}`} items={menuItems(menu.entry)} onClose={closeMenu} />}
     {modal === 'new' && <Dialog title="Create a folder" description="Give this folder a name. You can move files into it anytime." onClose={modalClose} onSubmit={onSubmit} submitLabel="Create folder" busy={busy}><label className="field-label">Folder name<input required maxLength={120} value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. Home documents" /></label></Dialog>}
     {modal === 'rename' && activeEntry && <Dialog title="Rename item" description="The item will keep its current location." onClose={modalClose} onSubmit={onSubmit} submitLabel="Save name" busy={busy}><label className="field-label">New name<input required maxLength={180} value={formName} onChange={e => setFormName(e.target.value)} /></label></Dialog>}
     {modal === 'move' && activeEntry && <Dialog title="Move item" description={`Choose a destination for “${activeEntry.name}”.`} onClose={modalClose} onSubmit={onSubmit} submitLabel="Move here" busy={busy}><label className="field-label">Destination<select value={formName} onChange={e => setFormName(e.target.value)}><option value="">Root folder</option>{allFolders.filter(item => item.id !== activeEntry.id).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></Dialog>}
@@ -225,10 +261,10 @@ export default function App() {
   </div>
 }
 
-function FileRow({ entry, grid, selected, onSelect, onOpen, view }: { entry: Entry; grid: boolean; selected: boolean; onSelect: (event: React.MouseEvent) => void; onOpen: () => void; view: View }) {
+function FileRow({ entry, grid, selected, onSelect, onOpen, onMenu, view }: { entry: Entry; grid: boolean; selected: boolean; onSelect: (event: React.MouseEvent) => void; onOpen: () => void; onMenu: (x: number, y: number) => void; view: View }) {
   const isPhoto = /\.(png|jpe?g|gif|webp)$/i.test(entry.name)
   const FileIcon = entry.kind === 'folder' ? Folder : isPhoto ? Image : /\.(pdf|docx?|xlsx?|md)$/i.test(entry.name) ? FileText : File
-  return <div className={`${grid ? 'file-card' : 'file-row'} ${selected ? 'chosen' : ''}`} onClick={onSelect} onDoubleClick={onOpen} role="button" tabIndex={0} aria-pressed={selected} onKeyDown={event => { if (event.key === 'Enter') onOpen(); if (event.key === ' ') { event.preventDefault(); onSelect(event as unknown as React.MouseEvent) } }}>
+  return <div className={`${grid ? 'file-card' : 'file-row'} ${selected ? 'chosen' : ''}`} onClick={onSelect} onDoubleClick={onOpen} onContextMenu={event => { event.preventDefault(); onMenu(event.clientX, event.clientY) }} role="button" tabIndex={0} aria-pressed={selected} aria-haspopup="menu" onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const box = event.currentTarget.getBoundingClientRect(); onMenu(box.left + 24, box.top + box.height / 2); return } if (event.key === 'Enter') onOpen(); if (event.key === ' ') { event.preventDefault(); onSelect(event as unknown as React.MouseEvent) } }}>
     <div className="file-main"><div className={`file-icon ${entry.kind === 'folder' ? 'folder-icon' : isPhoto ? 'photo-icon' : 'doc-icon'}`}><FileIcon size={18} fill={entry.kind === 'folder' ? 'currentColor' : 'none'} /></div><div className="file-title"><strong>{entry.name}</strong><small>{entry.kind === 'folder' ? 'Folder' : entry.syncState === 'synced' ? 'In sync' : entry.syncState === 'local' ? 'On this PC' : 'Syncing'}</small></div><div className="file-badges">{entry.starred && <Star size={13} fill="currentColor" aria-label="Favorite" />}{entry.pinned && <Wifi size={13} aria-label="Available offline" />}</div></div>
     <span className="modified">{timeLabel(entry.modified)}</span><span className="file-size">{entry.kind === 'folder' ? '—' : formatSize(entry.size)}</span><div className="row-actions">{selected && <Check size={15} aria-hidden="true" />}</div>
     {grid && <div className="card-meta"><span>{entry.kind === 'folder' ? 'Folder' : formatSize(entry.size)}</span><span>{timeLabel(entry.modified)}</span></div>}
