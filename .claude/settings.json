@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          { "type": "command", "command": "pwsh -NoProfile -File scripts/claude-public-guard.ps1" }
+        ]
+      }
+    ]
+  }
+}

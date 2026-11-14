@@ -1,0 +1,13 @@
+{
+  "name": "pcloud-vault-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "check": "pnpm --dir frontend test && pnpm --dir frontend build",
+    "preview": "pnpm --dir frontend dev --host 127.0.0.1"
+  },
+  "devDependencies": { "@tauri-apps/cli": "^2.9.0" }
+}

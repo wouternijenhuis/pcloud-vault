@@ -1,0 +1,164 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import App from './App'
+import { resetDemo, runAction } from './api'
+import { invoke } from '@tauri-apps/api/core'
+
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
+vi.mock('@tauri-apps/api/webviewWindow', () => ({ getCurrentWebviewWindow: () => ({ onDragDropEvent: () => Promise.resolve(() => undefined) }) }))
+
+const nativeStatus = {
+  vaultExists: true, unlocked: true, connected: true, accountEmail: 'alex@example.com', region: 'eu' as const,
+  cacheLimitBytes: 10 * 1024 ** 3, cacheBytes: 1 * 1024 ** 3,
+  pendingCount: 0, lastSync: Date.now(), oauthClientId: 'client-id',
+}
+let nativeStatusForTest = { ...nativeStatus }
+const nativeEntries = [
+  { id: 'folder', name: 'Travel', parentId: null, kind: 'folder' as const, size: 0, modified: Date.now(), starred: false, pinned: false, trashed: false, syncState: 'synced' as const },
+  { id: 'note', name: 'Notes.md', parentId: null, kind: 'file' as const, size: 1000, modified: Date.now(), starred: false, pinned: false, trashed: false, syncState: 'synced' as const },
+  { id: 'photo', name: 'Photo.png', parentId: null, kind: 'file' as const, size: 1000, modified: Date.now(), starred: false, pinned: false, trashed: false, syncState: 'synced' as const },
+]
+function useNativeBridge() {
+  window.__TAURI_INTERNALS__ = {}
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === 'status') return { ...nativeStatusForTest } as never
+    if (command === 'list_entries') return [...nativeEntries] as never
+    if (command === 'lock_vault') { nativeStatusForTest = { ...nativeStatus, unlocked: false }; return { ...nativeStatusForTest } as never }
+    return undefined as never
+  })
+}
+
+describe('pCloud Vault interface', () => {
+  beforeEach(() => { resetDemo(); nativeStatusForTest = { ...nativeStatus }; delete window.__TAURI_INTERNALS__; vi.mocked(invoke).mockReset() })
+  afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+  it('clearly labels browser mode and unencrypted cloud files', async () => {
+    render(<App />)
+    expect(await screen.findByText('DEMO MODE')).toBeInTheDocument()
+    expect(screen.getByText('Unencrypted')).toBeInTheDocument()
+    expect(await screen.findByText('Project brief.pdf')).toBeInTheDocument()
+    expect(screen.getByText('Sample data only — no cloud changes are made.')).toBeInTheDocument()
+    expect(screen.getByText('Cached files stay encrypted on this PC.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Available offline' }).querySelector('.nav-count')).toBeNull()
+  })
+
+  it('creates a folder in the labeled demo workspace', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'New' }))
+    fireEvent.change(screen.getByLabelText('Folder name'), { target: { value: 'Receipts' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create folder' }))
+    expect(await screen.findByText('Receipts')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Folder created')
+  })
+
+  it('surfaces native backend errors instead of swallowing them', async () => {
+    window.__TAURI_INTERNALS__ = {}
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('Sync is unavailable'))
+    await expect(runAction('sync_now', {})).rejects.toThrow('Sync is unavailable')
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('sync_now', {}))
+  })
+
+  it('clears visible vault names immediately when locked', async () => {
+    render(<App />)
+    expect(await screen.findByText('Project brief.pdf')).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('Lock vault'))
+    expect(await screen.findByText('Your vault is locked.')).toBeInTheDocument()
+    expect(screen.queryByText('Project brief.pdf')).not.toBeInTheDocument()
+  })
+
+  it('shows vault import, not vault-only toggles, for cloud files', async () => {
+    render(<App />)
+    fireEvent.click(screen.getByText('pCloud Files'))
+    fireEvent.click(await screen.findByText('Notes.md'))
+    const selection = document.querySelector<HTMLElement>('.selection-bar')!
+    expect(within(selection).getByRole('button', { name: /Import to vault/ })).toBeInTheDocument()
+    expect(within(selection).queryByRole('button', { name: /Favorite|Offline/ })).not.toBeInTheDocument()
+  })
+
+  it('returns collection navigation to the private vault workspace', async () => {
+    render(<App />)
+    fireEvent.click(screen.getByText('pCloud Files'))
+    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }))
+    const favorite = await screen.findByText('Project brief.pdf')
+    fireEvent.click(favorite)
+    const selection = document.querySelector<HTMLElement>('.selection-bar')!
+    expect(within(selection).getByRole('button', { name: /Favorite/ })).toBeInTheDocument()
+    expect(within(selection).queryByRole('button', { name: /Import to vault/ })).not.toBeInTheDocument()
+  })
+
+  it('supports navigating into a folder and back to root', async () => {
+    render(<App />)
+    const travel = await screen.findByText('Travel')
+    fireEvent.doubleClick(travel.closest('[role="button"]')!)
+    expect(await screen.findByText('Coastline.png')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Root' }))
+    expect(await screen.findByText('Notes.md')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Go up one folder' })).not.toBeInTheDocument()
+  })
+
+  it('offers folder export from selection', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByText('Travel'))
+    expect(screen.getByRole('button', { name: 'Export copy' })).toBeInTheDocument()
+  })
+
+  it('sends the Rust cache key and enforces twelve-character password input', async () => {
+    useNativeBridge()
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    fireEvent.change(await screen.findByLabelText('Cache limit'), { target: { value: '20' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('save_settings', { cacheLimitGib: 20, clientId: 'client-id' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change' }))
+    const newPassword = screen.getByLabelText('New password') as HTMLInputElement
+    expect(newPassword.minLength).toBe(12)
+    expect(screen.getByRole('dialog')).toHaveTextContent('does not re-encrypt every file')
+    expect(screen.getByRole('dialog')).toHaveTextContent('Trusted PCs')
+  })
+
+  it('requires twelve characters when creating a vault', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Forget device' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Private Vault' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Create a vault password' }))
+    expect((screen.getByLabelText('Vault password') as HTMLInputElement).minLength).toBe(12)
+  })
+
+  it('uses one native file picker command for Browse files', async () => {
+    useNativeBridge()
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse files' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('import_files', { parentId: null }))
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'import_files')).toHaveLength(1)
+    expect(document.querySelector('input[type="file"]')).toBeNull()
+  })
+
+  it('uses the native export command for a selected folder', async () => {
+    useNativeBridge()
+    render(<App />)
+    fireEvent.click(await screen.findByText('Travel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Export copy' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('download_entry', { location: 'vault', id: 'folder' }))
+  })
+
+  it('closes private previews when the native status becomes locked', async () => {
+    useNativeBridge()
+    let resolvePreview: (value: string | null) => void = () => undefined
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'status') return { ...nativeStatusForTest } as never
+      if (command === 'list_entries') return [...nativeEntries] as never
+      if (command === 'preview_entry') return await new Promise<string | null>(resolve => { resolvePreview = resolve }) as never
+      if (command === 'lock_vault') { nativeStatusForTest = { ...nativeStatus, unlocked: false }; return { ...nativeStatusForTest } as never }
+      return undefined as never
+    })
+    render(<App />)
+    const photo = await screen.findByText('Photo.png')
+    fireEvent.doubleClick(photo.closest('[role="button"]')!)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('Lock vault'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    resolvePreview('data:image/png;base64,private-preview')
+    await waitFor(() => expect(screen.queryByRole('img', { name: 'Photo.png' })).not.toBeInTheDocument())
+  })
+})

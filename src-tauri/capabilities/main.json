@@ -1,0 +1,16 @@
+{
+  "identifier": "main",
+  "description": "Only the bundled main window may use the private client commands.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default", "core:window:allow-show", "core:window:allow-set-focus",
+    "allow-status", "allow-list-entries", "allow-create-vault", "allow-unlock-vault",
+    "allow-lock-vault", "allow-forget-device", "allow-connect-pcloud", "allow-save-settings",
+    "allow-new-folder", "allow-rename-entry",
+    "allow-move-entry", "allow-trash-entry", "allow-restore-entry", "allow-toggle-favorite",
+    "allow-toggle-pin", "allow-import-files", "allow-import-paths", "allow-import-cloud-file",
+    "allow-download-entry", "allow-open-entry", "allow-preview-entry", "allow-sync-now",
+    "allow-change-password", "allow-export-recovery", "allow-get-activity"
+  ]
+}

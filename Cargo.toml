@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/vault-core", "crates/pcloud-api", "crates/vault-cli", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1
+
