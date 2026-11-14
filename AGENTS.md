@@ -8,7 +8,7 @@ Never commit or paste:
 
 - Personal names, email addresses, phone numbers, or account identifiers. Commits use the GitHub username with its `users.noreply.github.com` address.
 - Local machine paths, Windows/Unix usernames, hostnames, or drive layouts from a developer's machine. Use placeholders such as `D:\EncryptedVault` or `<data-dir>`.
-- Tokens, passwords, OAuth client IDs or secrets, recovery keys, API responses containing account data, `.env*` files, or DPAPI blobs.
+- Tokens, passwords, OAuth client IDs or secrets, recovery keys, API responses containing account data, `.env*` files, or protected device-secret blobs (`account.key`, `device.key`).
 - Real pCloud account data, real file names or contents from anyone's vault, logs, crash dumps, or screenshots that show any of the above.
 
 Rules:
@@ -30,12 +30,12 @@ Rules:
 
 ## Project notes
 
-- Rust workspace: `crates/vault-core` (crypto, store, sync), `crates/pcloud-api` (transport, OAuth, DPAPI), `crates/vault-cli` (recovery), `src-tauri` (desktop shell). React/TypeScript UI is in `frontend`.
+- Rust workspace: `crates/vault-core` (crypto, store, sync), `crates/pcloud-api` (transport, OAuth, device secret protection: DPAPI / Keychain / Secret Service), `crates/vault-cli` (recovery), `src-tauri` (desktop shell). React/TypeScript UI is in `frontend`.
 - Cloud credentials and file bytes stay in Rust. The UI talks only through the restricted Tauri commands in `src-tauri/capabilities/main.json`.
 - Validation:
   - `cargo test --workspace`
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `pnpm --dir frontend test`
   - `pnpm --dir frontend build`
-  - `pnpm build` (NSIS installer)
+  - `pnpm build` (installers for the current platform: NSIS, AppImage/deb, or app/dmg)
 - Toolchain helper: `. .\scripts\dev-env.ps1`. Set `PCLOUD_VAULT_TOOLCHAINS` to a portable toolchain folder if Rust/MSVC are not installed system-wide.

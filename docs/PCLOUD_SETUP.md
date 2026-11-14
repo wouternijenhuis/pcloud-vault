@@ -12,7 +12,7 @@ How it works and what it means:
 - Facebook, Google and Apple sign-in open HTTPS pop-up windows in the same private session. Like the sign-in window, they cannot invoke the app's commands.
 - Closing the sign-in window, or the page closing itself, cancels sign-in. Sign-in also times out after 10 minutes.
 - After you sign in, pCloud's website stores its session token in its `pcauth` cookie and your region in `locationid`. The app's Rust code reads these two cookies, clears the window's browsing data, and closes it. The token is verified with `userinfo` (trying the other region once if needed) and then stored only inside the current-user DPAPI account record.
-- The token is a **full account session**, equivalent to being signed in on pCloud's website. **Forget this PC** calls pCloud's `logout` to end that session. You can also end sessions from pCloud's own account settings.
+- The token is a **full account session**, equivalent to being signed in on pCloud's website. **Forget this computer** calls pCloud's `logout` to end that session. You can also end sessions from pCloud's own account settings.
 - This uses pCloud's website behavior rather than a documented developer API, so a pCloud website change can break it. If it does, use a registered OAuth app instead (below).
 
 ## Using a registered OAuth application
@@ -35,7 +35,7 @@ Prepare the request with these values:
 - **Write access:** `Yes`
 - **Website:** the actual project website or repository URL
 - **Expected users:** the actual number of people who will use this personal client
-- **Reason:** explain that this is a personal Windows desktop client that encrypts and decrypts files locally, uploads encrypted vault objects, and browses ordinary account files. Include the required callback URI `http://127.0.0.1:43187/callback`.
+- **Reason:** explain that this is a personal desktop client for Windows, Linux and macOS that encrypts and decrypts files locally, uploads encrypted vault objects, and browses ordinary account files. Include the required callback URI `http://127.0.0.1:43187/callback`.
 
 Submission does not itself create an approved OAuth app or validate live transfers. After pCloud approves the request, obtain the public client ID and ensure that the exact callback URI is registered. Do not enter a client secret in the desktop app, and never commit your client ID or account details to a repository.
 
@@ -51,7 +51,7 @@ The documented public-client flow returns a bearer token in the URL fragment. Th
 
 The callback must report one of the exact region/host pairs: US `1` / `api.pcloud.com`, or Europe `2` / `eapi.pcloud.com`. API credentials are sent in POST bodies over HTTPS. Download links are restricted to HTTPS pCloud hosts and do not receive the account token. Automatic redirects are disabled.
 
-The account token is stored only inside a current-user Windows DPAPI record by the desktop application. Never put tokens, passwords, or account JSON into source files, shell arguments, diagnostics, or screenshots. If the token is revoked, reconnect; changing the vault password does not replace the pCloud token.
+The account token is stored only inside a per-user protected record by the desktop application (Windows DPAPI, or a device key in the macOS Keychain / Linux Secret Service). Never put tokens, passwords, or account JSON into source files, shell arguments, diagnostics, or screenshots. If the token is revoked, reconnect; changing the vault password does not replace the pCloud token.
 
 For immutable vault objects, the transport uses `nopartial=1` and `renameifexists=1`. It checks existing canonical objects and verifies a SHA-256 digest by downloading newly uploaded data before reporting them verified. File contents are already encrypted by the vault core before reaching this module. Read-back verification does not authenticate plaintext by itself; vault AEAD verification remains mandatory on reads.
 

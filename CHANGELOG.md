@@ -2,6 +2,18 @@
 
 All notable changes to pCloud Vault are listed here. The project follows [Semantic Versioning](https://semver.org/). A release is published automatically when a merge to `main` carries a new version in `src-tauri/tauri.conf.json`.
 
+## [0.2.0]
+
+pCloud Vault now runs on Linux and macOS as well as Windows.
+
+- **Linux (x64):** an AppImage and a `.deb` package. Saved sign-ins and remembered unlocks use a device key kept in your Secret Service keyring (GNOME Keyring or KWallet).
+- **macOS (Apple Silicon and Intel):** a universal `.dmg`. Saved secrets use a device key kept in your login Keychain. Clicking the Dock icon reopens the window.
+- **Start in the background at sign-in** on every platform while a computer is remembered: Windows Run key, Linux XDG autostart entry, macOS LaunchAgent.
+- Without a keyring (for example a minimal Linux desktop), the app still works for the session and explains in Activity why it cannot remember the computer or the sign-in.
+- **Recovery tool** `vault-recovery` is included for all three platforms.
+- Windows keeps using DPAPI, so data from 0.1.0 keeps working without changes.
+- Release downloads now include build provenance and one `SHA256SUMS.txt` for every file.
+
 ## [0.1.0]
 
 First public release for Windows 11 x64.

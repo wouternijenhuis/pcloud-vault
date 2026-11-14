@@ -1,7 +1,8 @@
 name: CI
 
-# One Windows job on ready pull requests to main. Draft pull requests skip it; it runs again
-# when a draft is marked ready for review. Releases are handled by release.yml.
+# Tests, lints and builds on Windows, Linux and macOS for ready pull requests to main.
+# Draft pull requests skip it; it runs again when a draft is marked ready for review.
+# Releases are handled by release.yml.
 on:
   pull_request:
     branches: [main]
@@ -17,28 +18,52 @@ concurrency:
 
 jobs:
   check:
-    name: Test, lint and build
+    name: Test, lint and build (${{ matrix.os }})
     if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
-    runs-on: windows-latest
-    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundle: --bundles nsis
+          - os: ubuntu-22.04
+            bundle: --bundles appimage,deb
+          - os: macos-latest
+            bundle: --target universal-apple-darwin --bundles app,dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev patchelf libfuse2
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      - name: macOS targets
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # One command per step: a multi-line pwsh step only fails on its last command.
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir frontend install --frozen-lockfile
       - name: Public-safety check
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: ./scripts/check-public.ps1
       - name: Public-safety check self-test
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: ./scripts/test-check-public.ps1
       - run: cargo fmt --all -- --check
+      # The frontend build must exist before clippy compiles the Tauri context.
+      - run: pnpm --dir frontend build
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - run: pnpm --dir frontend test
-      - run: pnpm --dir frontend build
+      # Same installer build as release.yml, so packaging problems surface before a merge.
+      - name: Build installers
+        run: pnpm tauri build ${{ matrix.bundle }}

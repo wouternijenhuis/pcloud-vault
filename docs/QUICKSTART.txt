@@ -1,28 +1,44 @@
 pCloud Vault - quick start
 ==========================
 
-pCloud Vault is a free, open-source Windows client for pCloud with a private,
-client-side encrypted vault. Made in Europe. Not affiliated with pCloud AG.
+pCloud Vault is a free, open-source pCloud client for Windows, Linux and
+macOS with a private, client-side encrypted vault. Made in Europe. Not
+affiliated with pCloud AG.
 
 REQUIREMENTS
-  Windows 11 x64 (WebView2 is included with Windows 11) and a pCloud account.
+  A pCloud account and one of:
+  - Windows 11 x64 (WebView2 is included with Windows 11).
+  - Linux x64 with a desktop keyring (GNOME Keyring or KWallet), for
+    example Ubuntu 22.04 or newer.
+  - macOS 11 or newer, Apple Silicon or Intel.
+
+INSTALL
+  Windows  Run "pCloud-Vault-<version>-setup.exe", or start
+           "pCloud Vault.exe" directly (portable, no installation needed).
+           SmartScreen may warn because the app is not code-signed yet:
+           choose "More info" -> "Run anyway".
+  Linux    Make the AppImage executable and start it:
+             chmod +x pCloud-Vault*.AppImage && ./pCloud-Vault*.AppImage
+           or install the .deb:  sudo apt install ./pCloud-Vault-*.deb
+           GNOME needs its AppIndicator extension to show the tray icon.
+  macOS    Open the .dmg and drag pCloud Vault to Applications. The app is
+           not notarized yet: open it once, then choose "Open Anyway" in
+           System Settings -> Privacy & Security (macOS 14 and earlier:
+           right-click the app and choose "Open"). After an update, macOS
+           may ask again to allow Keychain access.
+
+  Check every download against SHA256SUMS.txt first.
 
 GET STARTED
-  1. Install with "pCloud-Vault-<version>-setup.exe", or run
-     "pCloud Vault.exe" directly (portable, no installation needed).
-  2. The welcome guide opens on first start:
+  1. The welcome guide opens on first start:
      - Sign in on pCloud's website (email, Google, Apple or Facebook).
      - Create your vault password (12+ characters). Nobody can recover it
        for you, so keep it safe.
      - Save a recovery key and store it offline.
-  3. Drag files into Private Vault. They are encrypted on your PC before
-     upload. Your originals stay where they are.
+  2. Drag files into Private Vault. They are encrypted on your computer
+     before upload. Your originals stay where they are.
 
-  Windows SmartScreen may warn on first start because the app is not
-  code-signed yet. Choose "More info" -> "Run anyway" if you trust this
-  download. Check it against SHA256SUMS.txt first.
-
-ON ANOTHER PC
+ON ANOTHER COMPUTER
   Install, sign in to the same pCloud account and enter your vault password
   once. Your vault appears with all files.
 
@@ -30,18 +46,24 @@ GOOD TO KNOW
   - pCloud's own apps do not show the vault folder (".pcloud-vault"). Your
     vault files appear only in this app, under their real names.
   - "pCloud Files" shows your regular, unencrypted pCloud files.
-  - Closing the window keeps the app running in the tray. Use the tray
+  - Closing the window keeps the app running in the tray (menu bar on
+    macOS; click the Dock icon to bring the window back). Use the tray
     menu to lock or quit.
+  - Remembered sign-ins are protected by your system: Windows DPAPI, the
+    macOS Keychain, or the Linux Secret Service keyring.
 
 RECOVERY WITHOUT THE APP
-  vault-recovery.exe verify "<vault folder>"
-  vault-recovery.exe export "<vault folder>" "<new output folder>"
+  Windows:          vault-recovery.exe verify "<vault folder>"
+  Linux and macOS:  ./vault-recovery verify "<vault folder>"
+  Export:           vault-recovery export "<vault folder>" "<new output folder>"
   Add --recovery to use your recovery key instead of the password.
   See README.md for downloading a vault from pCloud first.
 
 VERIFY THIS DOWNLOAD
-  Compare file hashes with SHA256SUMS.txt (PowerShell: Get-FileHash <file>),
-  or, with the GitHub CLI:
+  sha256sum -c SHA256SUMS.txt --ignore-missing   (Linux)
+  shasum -a 256 -c SHA256SUMS.txt --ignore-missing   (macOS)
+  Get-FileHash <file>   (Windows PowerShell; compare with SHA256SUMS.txt)
+  Or, with the GitHub CLI:
   gh attestation verify <file> --repo wouternijenhuis/pcloud-vault
 
 MORE

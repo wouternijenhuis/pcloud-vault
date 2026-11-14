@@ -326,7 +326,7 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
             .upload_bytes_immutable(root_id, HEADER_NAME, header)
             .map_err(|e| e.to_string())?;
     }
-    // Re-read the winning header even after creation: another PC may have
+    // Re-read the winning header even after creation: another computer may have
     // discovered the empty account concurrently with an independent vault.
     let published = client
         .list_folder(root_id)
@@ -347,7 +347,7 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
         let current_salt = vault.header().salt.clone();
         if remote_header.salt != current_salt {
             if is_retired(s, &remote_header.salt)? {
-                // Every wrapper this PC replaced stays retired, so an older (possibly
+                // Every wrapper this computer replaced stays retired, so an older (possibly
                 // compromised) password cannot silently come back through the cloud.
                 s.log(
                     "The cloud vault header was reverted to an older password. Restoring the current one.",
@@ -362,7 +362,7 @@ pub(crate) fn sync(s: &Arc<Inner>) -> AppResult<()> {
                 if pending_path.exists() {
                     fs::remove_file(&pending_path).map_err(|e| e.to_string())?;
                     republish = false;
-                    s.log("The vault password was changed on another PC at the same time. That password now applies; the change made on this PC was not applied.", "info");
+                    s.log("The vault password was changed on another computer at the same time. That password now applies; the change made on this computer was not applied.", "info");
                 }
             }
         }
@@ -563,7 +563,7 @@ pub(crate) fn ensure_file(s: &Arc<Inner>, id: &str) -> AppResult<InUse> {
     })?;
     let remote = remote_objects(s, &client)?;
     for object_id in missing {
-        let metadata = remote.iter().find(|m| !m.is_folder && object_identity(&m.name).is_ok_and(|(id, _)| id == object_id)).ok_or("Encrypted file data is unavailable in pCloud. Sync may still be running on another PC.")?;
+        let metadata = remote.iter().find(|m| !m.is_folder && object_identity(&m.name).is_ok_and(|(id, _)| id == object_id)).ok_or("Encrypted file data is unavailable in pCloud. Sync may still be running on another computer.")?;
         let object = decode(
             &metadata.name,
             download(&client, metadata.id, MAX_METADATA)?,
@@ -629,11 +629,12 @@ pub(crate) fn publish_header(s: &Arc<Inner>) -> AppResult<()> {
         vault
             .verify_header(&remote)
             .map_err(|_| "Remote vault identity changed; password update paused")?;
-        // Overwrite only the wrapper this PC last adopted (or one it already retired);
-        // anything else is a newer password from another PC that the next sync adopts.
+        // Overwrite only the wrapper this computer last adopted (or one it already retired);
+        // anything else is a newer password from another computer that the next sync adopts.
         if remote.salt != vault.header().salt && !is_retired(s, &remote.salt)? {
             return Err(
-                "The vault password was changed on another PC. Sync again to adopt it.".into(),
+                "The vault password was changed on another computer. Sync again to adopt it."
+                    .into(),
             );
         }
         vault.adopt_header(&pending).map_err(|e| e.to_string())?;

@@ -21,7 +21,7 @@ let demoStatus: AppStatus = { vaultExists: true, unlocked: true, connected: true
 let activity: Activity[] = [
   { id: 'a1', message: 'Synced Project brief.pdf', time: now - 10 * 60_000, kind: 'success' },
   { id: 'a2', message: 'Alpine morning.jpg saved for offline access', time: now - 50 * 60_000, kind: 'info' },
-  { id: 'a3', message: 'Vault unlocked on this PC', time: now - 3 * 60 * 60_000, kind: 'success' },
+  { id: 'a3', message: 'Vault unlocked on this computer', time: now - 3 * 60 * 60_000, kind: 'success' },
 ]
 export const resetDemo = () => { demoEntries = starter.map(item => ({ ...item })); demoStatus = { ...demoStatus, vaultExists: true, unlocked: true }; activity = [] }
 const demo = async <T,>(native: () => Promise<T>, local: () => T): Promise<T> => isDesktop() ? native() : local()

@@ -1,7 +1,7 @@
 //! pCloud's regional API, browser sign-in, and Windows user-bound secret storage.
 //! Network errors intentionally omit request URLs and response bodies.
 
-pub mod dpapi;
+pub mod device_protection;
 pub mod oauth;
 
 use reqwest::blocking::{multipart, Client as HttpClient, Response};
@@ -58,10 +58,10 @@ pub enum Error {
     LoginDeclined,
     #[error("The pCloud sign-in response was invalid.")]
     InvalidLogin,
-    #[error("Windows could not protect or unlock this device's saved secret. Use the vault password and connect pCloud again if needed.")]
+    #[error("This computer could not protect or unlock its saved secret. Use the vault password and connect pCloud again if needed.")]
     DeviceProtection,
-    #[error("Windows user-bound secret protection is unavailable on this platform.")]
-    UnsupportedPlatform,
+    #[error("The system keyring is unavailable or access was denied, so this computer cannot save secrets. Allow access in the Keychain prompt on macOS, or run a Secret Service such as GNOME Keyring or KWallet on Linux.")]
+    KeyringUnavailable,
 }
 
 impl From<io::Error> for Error {
