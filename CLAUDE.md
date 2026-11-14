@@ -15,6 +15,7 @@ Rules:
 
 - Test fixtures and sample UI data are synthetic. Use `example.com`, `.invalid`, or `.test` domains.
 - Run `pwsh -NoProfile -File scripts/check-public.ps1` before committing and pushing. Enable the hooks once per clone with `git config core.hooksPath .githooks`. Put personal terms the scan should also block (your real name, machine username) one per line in the untracked file `.git/info/public-denylist`, never in a tracked file.
+- Merge pull requests locally (`git merge --squash`, then commit with the username/noreply identity and push). GitHub's merge buttons author the commit with the account's profile display name, which can be a real name.
 - Fix a failing check by removing the data. Do not weaken the patterns, and do not bypass the hooks with `--no-verify`.
 - If something sensitive was ever pushed, rewriting history is not enough. Rotate or revoke the secret first, then report it to the maintainer.
 - Security vulnerabilities go through private reporting ([SECURITY.md](SECURITY.md)), never public issues or PR descriptions.
