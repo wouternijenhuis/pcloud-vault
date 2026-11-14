@@ -9,6 +9,8 @@ Choose **Sign in on pCloud website**. The app opens pCloud's sign-in page (`http
 How it works and what it means:
 
 - The window is **private**: it keeps no browsing profile on disk and has **no access to the app's commands**. It may only navigate to HTTPS pages.
+- Facebook, Google and Apple sign-in open HTTPS pop-up windows in the same private session. Like the sign-in window, they cannot invoke the app's commands.
+- Closing the sign-in window, or the page closing itself, cancels sign-in. Sign-in also times out after 10 minutes.
 - After you sign in, pCloud's website stores its session token in its `pcauth` cookie and your region in `locationid`. The app's Rust code reads these two cookies, clears the window's browsing data, and closes it. The token is verified with `userinfo` (trying the other region once if needed) and then stored only inside the current-user DPAPI account record.
 - The token is a **full account session**, equivalent to being signed in on pCloud's website. **Forget this PC** calls pCloud's `logout` to end that session. You can also end sessions from pCloud's own account settings.
 - This uses pCloud's website behavior rather than a documented developer API, so a pCloud website change can break it. If it does, use a registered OAuth app instead (below).

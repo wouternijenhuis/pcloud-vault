@@ -64,3 +64,5 @@ button:focus-visible, input:focus-visible, select:focus-visible, [role="button"]
 .connect-alternative .button { margin-top: 12px; }
 .dark .connect-alternative { border-color: #34394d; }
 .dark .connect-alternative summary { color: #b0b7ca; }
+.dialog-error { margin: 0 0 12px; padding: 9px 11px; border: 1px solid #f0d6d9; border-radius: 7px; background: #fdf3f4; color: #a8505c; font-size: 10px; line-height: 1.5; }
+.dark .dialog-error { border-color: #5a3640; background: #3a2930; color: #f0b9c0; }

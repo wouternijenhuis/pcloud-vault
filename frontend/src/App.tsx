@@ -19,6 +19,13 @@ const nav: { id: View; label: string; icon: typeof Home }[] = [
 const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`
 const timeLabel = (time: number) => new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(time))
 
+/** Tauri commands reject with the backend's message as a plain string, not an Error. */
+function errorMessage(reason: unknown, fallback: string) {
+  if (reason instanceof Error && reason.message) return reason.message
+  if (typeof reason === 'string' && reason.trim()) return reason
+  return fallback
+}
+
 export default function App() {
   const desktop = isDesktop()
   const [status, setStatus] = useState<AppStatus | null>(null)
@@ -65,7 +72,7 @@ export default function App() {
   const refreshStatus = useCallback(async () => {
     const request = ++statusRequest.current
     try { const value = await getStatus(); if (request === statusRequest.current) applyStatus(value) }
-    catch (reason) { if (request === statusRequest.current) setError(reason instanceof Error ? reason.message : 'Could not read vault status.') }
+    catch (reason) { if (request === statusRequest.current) setError(errorMessage(reason, 'Could not read vault status.')) }
   }, [applyStatus])
   const refreshEntries = useCallback(async () => {
     if (view === 'settings' || view === 'activity') { entriesRequest.current++; setEntries([]); return }
@@ -73,7 +80,7 @@ export default function App() {
     if (!available) { entriesRequest.current++; setEntries([]); return }
     const request = ++entriesRequest.current
     try { const result = await listEntries(location, parentId, query || null, view); if (request === entriesRequest.current) setEntries(result) }
-    catch (reason) { if (request === entriesRequest.current) setError(reason instanceof Error ? reason.message : 'Could not load files.') }
+    catch (reason) { if (request === entriesRequest.current) setError(errorMessage(reason, 'Could not load files.')) }
   }, [location, parentId, query, status, view])
   useEffect(() => { void refreshStatus(); const id = window.setInterval(() => { void refreshStatus() }, 5000); return () => { window.clearInterval(id); statusRequest.current++ } }, [refreshStatus])
   useEffect(() => () => { previewRequest.current++ }, [])
@@ -114,7 +121,7 @@ export default function App() {
       setSelected([])
       return true
     }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'That action could not be completed.'); return false }
+    catch (reason) { setError(errorMessage(reason, 'That action could not be completed.')); return false }
     finally { setBusy(false) }
   }
   const folder = path.at(-1) ?? null
@@ -137,7 +144,7 @@ export default function App() {
     if (!desktop) { fileInput.current?.click(); return }
     setBusy(true); setError('')
     try { await runAction('import_files', { parentId }); announce('Import started'); await refreshEntries() }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not open the file picker.') }
+    catch (reason) { setError(errorMessage(reason, 'Could not open the file picker.')) }
     finally { setBusy(false) }
   }
   const exportEntry = async (entry: Entry) => {
@@ -212,7 +219,7 @@ export default function App() {
     {modal === 'create' && <Dialog title="Create your private vault" description="Choose a strong password with at least 12 characters. Files in your vault stay encrypted on this PC." onClose={modalClose} onSubmit={onSubmit} submitLabel="Create vault" busy={busy}><label className="field-label">Vault password<input required type="password" minLength={12} value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" placeholder="At least 12 characters" /></label><label className="check-label"><input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />Remember this PC so you can unlock faster</label></Dialog>}
     {modal === 'unlock' && <Dialog title="Unlock your vault" description="Enter your vault password to continue." onClose={modalClose} onSubmit={onSubmit} submitLabel="Unlock vault" busy={busy}><label className="field-label">Vault password<input required type="password" minLength={12} value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" /></label><label className="check-label"><input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />Remember this PC</label></Dialog>}
     {modal === 'password' && <Dialog title="Change vault password" description="This wraps your existing vault key with the new password; it does not re-encrypt every file. Trusted PCs that already remember this vault keep their key." onClose={modalClose} onSubmit={onSubmit} submitLabel="Update password" busy={busy}><label className="field-label">Current password<input required type="password" minLength={12} value={formName} onChange={e => setFormName(e.target.value)} /></label><label className="field-label">New password<input required type="password" minLength={12} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 12 characters" /></label></Dialog>}
-    {modal === 'connect' && <Dialog title="Connect to pCloud" description="Sign in on pCloud's own website. Your password and two-step verification stay on pCloud's page." onClose={modalClose} onSubmit={onSubmit} busy={busy}><button type="button" className="button button-primary connect-web" onClick={() => void connectWeb()} disabled={busy}><Globe size={15} /> {busy ? 'Waiting for pCloud sign-in…' : 'Sign in on pCloud website'}</button><p className="privacy-note"><ShieldCheck size={15} /> A separate private window opens pCloud's sign-in page. This app keeps only the resulting session token, protected by Windows, and ends that session when you forget this PC.</p><details className="connect-alternative"><summary>Use a registered pCloud app instead</summary><label className="field-label">OAuth client ID<input required value={settings.clientId} onChange={e => setSettings({ ...settings, clientId: e.target.value })} placeholder="Paste your pCloud app client ID" /></label><p className="privacy-note"><ShieldCheck size={15} /> Register a pCloud app with full account access and callback URL <code>http://127.0.0.1:43187/callback</code>. Your browser opens pCloud's sign-in; this app only receives an access token.</p><button type="submit" className="button button-subtle" disabled={busy}>Continue with OAuth app</button></details></Dialog>}
+    {modal === 'connect' && <Dialog title="Connect to pCloud" description="Sign in on pCloud's own website. Your password and two-step verification stay on pCloud's page." onClose={modalClose} onSubmit={onSubmit} busy={busy}>{error && <p className="dialog-error" role="alert">{error}</p>}<button type="button" className="button button-primary connect-web" onClick={() => void connectWeb()} disabled={busy}><Globe size={15} /> {busy ? 'Waiting for pCloud sign-in…' : 'Sign in on pCloud website'}</button><p className="privacy-note"><ShieldCheck size={15} /> A separate private window opens pCloud's sign-in page. This app keeps only the resulting session token, protected by Windows, and ends that session when you forget this PC.</p><details className="connect-alternative"><summary>Use a registered pCloud app instead</summary><label className="field-label">OAuth client ID<input required value={settings.clientId} onChange={e => setSettings({ ...settings, clientId: e.target.value })} placeholder="Paste your pCloud app client ID" /></label><p className="privacy-note"><ShieldCheck size={15} /> Register a pCloud app with full account access and callback URL <code>http://127.0.0.1:43187/callback</code>. Your browser opens pCloud's sign-in; this app only receives an access token.</p><button type="submit" className="button button-subtle" disabled={busy}>Continue with OAuth app</button></details></Dialog>}
     {modal === 'preview' && activeEntry && <Dialog title={activeEntry.name} description={`${formatSize(activeEntry.size)} · ${timeLabel(activeEntry.modified)}`} onClose={modalClose}><div className="preview-area">{preview ? <img src={preview} alt={activeEntry.name} /> : <div className="preview-placeholder"><FileImage size={38} /><span>Preview is available in the desktop app.</span></div>}</div><p className="export-warning">Exported copies are decrypted and saved outside your managed vault.</p><div className="preview-actions"><button className="button button-subtle" onClick={() => void exportEntry(activeEntry)}><ArrowDownToLine size={16} /> Export copy</button><button className="button button-primary" onClick={() => desktop ? void perform('open_entry', { location, id: activeEntry.id }, 'Exported copy opened') : announce('Export and open is available in the Windows app')}><ArrowRight size={16} /> Export and open</button></div></Dialog>}
     {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
   </div>

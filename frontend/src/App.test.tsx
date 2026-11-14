@@ -129,6 +129,21 @@ describe('pCloud Vault interface', () => {
     expect(invoke).not.toHaveBeenCalledWith('connect_pcloud', expect.anything())
   })
 
+  it('shows the backend message when website sign-in is cancelled', async () => {
+    useNativeBridge()
+    const native = vi.mocked(invoke).getMockImplementation()!
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'connect_pcloud_web') throw 'pCloud sign-in was cancelled.'
+      return native(command, args)
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /Sign in on pCloud website/ }))
+    expect(await within(dialog).findByText('pCloud sign-in was cancelled.')).toBeInTheDocument()
+  })
+
   it('requires twelve characters when creating a vault', async () => {
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))

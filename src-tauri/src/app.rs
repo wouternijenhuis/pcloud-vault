@@ -380,24 +380,54 @@ async fn connect_pcloud_web(
         .center()
         .incognito(true)
         .on_navigation(|target| target.scheme() == "https")
+        // Facebook, Google and Apple sign-in open pop-ups that report back to the page.
+        // They open as plain browser windows in the same private session, with no
+        // access to this app's commands.
+        .on_new_window(|target, _| {
+            if target.scheme() == "https" {
+                tauri::webview::NewWindowResponse::Allow
+            } else {
+                tauri::webview::NewWindowResponse::Deny
+            }
+        })
         .build()
         .map_err(|e| e.to_string())?;
+        let closed = Arc::new(AtomicBool::new(false));
+        {
+            let closed = closed.clone();
+            window.on_window_event(move |event| {
+                if matches!(event, tauri::WindowEvent::Destroyed) {
+                    closed.store(true, std::sync::atomic::Ordering::Release);
+                }
+            });
+        }
         let started = std::time::Instant::now();
+        let mut unreadable = 0;
         // A token that failed verification (for example one set midway through two-step
         // sign-in) is not retried; keep polling until pCloud issues a working one.
         let mut rejected: Option<Zeroizing<String>> = None;
         let client = loop {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            if app.get_webview_window(WEB_LOGIN_LABEL).is_none() {
+            if closed.load(std::sync::atomic::Ordering::Acquire)
+                || app.get_webview_window(WEB_LOGIN_LABEL).is_none()
+            {
                 return Err("pCloud sign-in was cancelled.".into());
             }
             if started.elapsed() > WEB_LOGIN_TIMEOUT {
                 let _ = window.close();
                 return Err("pCloud sign-in timed out. Try again.".into());
             }
+            // The page can close its own web content (window.close()), leaving an empty
+            // native window whose cookie store is gone; treat that as a cancel.
             let Ok(cookies) = window.cookies_for_url(url.clone()) else {
+                unreadable += 1;
+                if unreadable >= 6 {
+                    let _ = window.close();
+                    return Err("pCloud sign-in was cancelled.".into());
+                }
                 continue;
             };
+            unreadable = 0;
             let token = cookies
                 .iter()
                 .find(|c| c.name() == "pcauth" && !c.value().is_empty())
