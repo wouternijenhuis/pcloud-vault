@@ -23,12 +23,14 @@ pub fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(not(windows))]
 pub fn protect(data: &[u8]) -> Result<Vec<u8>> {
-    seal(&keyring_store::device_key(true)?, data)
+    let key = keyring_store::device_key(true)?;
+    seal(&key, data)
 }
 
 #[cfg(not(windows))]
 pub fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
-    open(&keyring_store::device_key(false)?, data)
+    let key = keyring_store::device_key(false)?;
+    open(&key, data)
 }
 
 const SEAL_VERSION: u8 = 1;
@@ -96,6 +98,10 @@ mod keyring_store {
 
     /// Reads the device key, creating it on first use when `create` is set.
     pub(super) fn device_key(create: bool) -> Result<Zeroizing<[u8; 32]>> {
+        // Serializes first-use creation so two concurrent callers cannot each store a
+        // different key and leave the first sealed record undecryptable.
+        static CREATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = CREATE.lock().map_err(|_| Error::DeviceProtection)?;
         let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(unavailable)?;
         match entry.get_secret() {
             Ok(secret) => {
@@ -108,9 +114,15 @@ mod keyring_store {
             }
             Err(keyring::Error::NoEntry) if create => {
                 let mut key = Zeroizing::new([0u8; 32]);
-                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, key.as_mut());
-                entry.set_secret(key.as_ref()).map_err(unavailable)?;
-                Ok(key)
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key[..]);
+                entry.set_secret(&key[..]).map_err(unavailable)?;
+                // Use what the keyring actually stored, in case another process won.
+                let stored = Zeroizing::new(entry.get_secret().map_err(unavailable)?);
+                let stored: [u8; 32] = stored
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Error::DeviceProtection)?;
+                Ok(Zeroizing::new(stored))
             }
             Err(keyring::Error::NoEntry) => Err(Error::DeviceProtection),
             Err(error) => Err(unavailable(error)),

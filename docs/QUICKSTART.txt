@@ -22,8 +22,10 @@ INSTALL
            or install the .deb:  sudo apt install ./pCloud-Vault-*.deb
            GNOME needs its AppIndicator extension to show the tray icon.
   macOS    Open the .dmg and drag pCloud Vault to Applications. The app is
-           not notarized yet: the first time, right-click it and choose
-           "Open".
+           not notarized yet: open it once, then choose "Open Anyway" in
+           System Settings -> Privacy & Security (macOS 14 and earlier:
+           right-click the app and choose "Open"). After an update, macOS
+           may ask again to allow Keychain access.
 
   Check every download against SHA256SUMS.txt first.
 

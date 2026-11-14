@@ -30,7 +30,7 @@ Get the file for your system from the [latest release](https://github.com/wouter
 You need a pCloud account. Every archive also contains the `vault-recovery` tool and a quick-start guide.
 
 - **Linux:** saved sign-ins use your desktop's Secret Service keyring (GNOME Keyring or KWallet), which most desktops run already. The tray icon needs AppIndicator support, which GNOME provides through its AppIndicator extension. Built on Ubuntu 22.04, so it runs on that release and newer distributions.
-- **Not code-signed yet.** Check the download against `SHA256SUMS.txt` first. On Windows, SmartScreen may warn on first start: choose **More info → Run anyway**. On macOS, right-click the app and choose **Open** the first time.
+- **Not code-signed yet.** Check the download against `SHA256SUMS.txt` first. On Windows, SmartScreen may warn on first start: choose **More info → Run anyway**. On macOS, open it once, then choose **Open Anyway** in System Settings → Privacy & Security (on macOS 14 and earlier, right-click the app and choose **Open**). Keep the app in Applications so it can start at sign-in.
 
 Every release also carries a [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations), which proves it was built from this repository:
 

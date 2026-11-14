@@ -207,6 +207,6 @@ jobs:
           Check the files against SHA256SUMS.txt (\`sha256sum -c SHA256SUMS.txt --ignore-missing\`), or check that a file was built from this repository:
           \`gh attestation verify $base-linux-x64.AppImage --repo $GITHUB_REPOSITORY\`
 
-          The apps are not code-signed yet. Windows SmartScreen may warn on first start. On macOS, right-click the app and choose **Open** the first time.
+          The apps are not code-signed yet. Windows SmartScreen may warn on first start. On macOS, open it once, then choose **Open Anyway** in System Settings → Privacy & Security (on macOS 14 and earlier, right-click the app and choose **Open**). Each update may ask again for Keychain access.
           EOF
           gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "pCloud Vault $VERSION" --notes-file notes.md

@@ -202,6 +202,16 @@ impl Inner {
             error: None,
         })
     }
+    /// Remembering is a convenience: when it fails (for example no keyring on Linux),
+    /// the vault still opens for this session and the reason is shown in Activity.
+    fn remember_or_warn(&self, vault: &Vault, remember: bool) {
+        if let Err(error) = self.remember(vault, remember) {
+            self.log(
+                &format!("This computer could not be remembered: {error}"),
+                "error",
+            );
+        }
+    }
     fn remember(&self, vault: &Vault, remember: bool) -> AppResult<()> {
         let path = self.directory.join("device.key");
         if remember {
@@ -267,6 +277,10 @@ fn set_platform_startup(enabled: bool, executable: &Path) -> AppResult<()> {
 
 #[cfg(target_os = "macos")]
 fn startup_entry(executable: &Path) -> AppResult<(PathBuf, String)> {
+    let location = executable.to_string_lossy();
+    if location.contains("/AppTranslocation/") || location.starts_with("/Volumes/") {
+        return Err("Move pCloud Vault to Applications to start it at sign-in.".into());
+    }
     let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
     let escape = |text: &str| {
         text.replace('&', "&amp;")
@@ -365,7 +379,7 @@ async fn create_vault(
         let mut current = locked(&s.vault)?;
         if s.vault_path().join("vault.json").exists() { return Err("A vault already exists. Unlock it instead.".into()); }
         let vault = Vault::create(&s.vault_path(), &password).map_err(|e| e.to_string())?;
-        s.remember(&vault, remember)?;
+        s.remember_or_warn(&vault, remember);
         *current = Some(vault);
         drop(current);
         s.log("Private vault created. Files are encrypted before leaving this computer.", "success");
@@ -386,7 +400,7 @@ async fn unlock_vault(
         let password = Zeroizing::new(password);
         let vault = Vault::open(&s.vault_path(), &password)
             .map_err(|_| "Unable to unlock. Check the password and vault integrity.".to_string())?;
-        s.remember(&vault, remember)?;
+        s.remember_or_warn(&vault, remember);
         *locked(&s.vault)? = Some(vault);
         s.log("Vault unlocked on this computer.", "success");
         if let Err(error) = replication::sync(&s) {
@@ -573,10 +587,20 @@ fn finish_connect(s: &Arc<Inner>, account: pcloud_api::Account) -> AppResult<App
         }
     }
     let bytes = Zeroizing::new(serde_json::to_vec(&account).map_err(|e| e.to_string())?);
-    atomic_write(
-        &s.directory.join("account.key"),
-        &pcloud_api::device_protection::protect(&bytes).map_err(|e| e.to_string())?,
-    )?;
+    let saved = s.directory.join("account.key");
+    match pcloud_api::device_protection::protect(&bytes) {
+        Ok(protected) => atomic_write(&saved, &protected)?,
+        // Without protected storage, stay connected for this session only.
+        Err(error) => {
+            if saved.exists() {
+                fs::remove_file(&saved).map_err(|e| e.to_string())?;
+            }
+            s.log(
+                &format!("{error} pCloud stays connected until the app quits."),
+                "error",
+            );
+        }
+    }
     let replaced = previous.filter(|previous| previous.token != account.token);
     *locked(&s.account)? = Some(account);
     if let Some(replaced) = replaced {
