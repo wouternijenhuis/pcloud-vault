@@ -41,4 +41,4 @@ Local checks and native smoke-test results are recorded in the pull request. Tes
 
 Live pCloud account authorization, existing-file scope, real remote replication and multi-PC network tests remain pending the provider's manual OAuth app approval. Mock transport tests and in-memory replication tests do not establish those outcomes. This new protocol still needs an independent security audit before audited-security claims or sole-copy use.
 
-No hosted CI workflows, deployment, or release automation are configured.
+Ready pull requests to `main` run [CI](../.github/workflows/ci.yml). Merging a new version publishes a release through [release.yml](../.github/workflows/release.yml), with checksums and build provenance attestations. There is no deployment or automatic updater.

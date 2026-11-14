@@ -3,7 +3,7 @@ import {
   Activity as ActivityIcon, ArrowDownToLine, ArrowLeft, ArrowRight, Check, ChevronRight, Cloud,
   File, FileImage, FileText, Folder, FolderPlus, Globe, Grid2X2, HardDrive, Home, Image,
   LayoutList, LockKeyhole, Moon, Plus, RefreshCw, Search, Settings as SettingsIcon,
-  ShieldCheck, Star, Sun, Trash2, Upload, Wifi, X,
+  Eye, ShieldCheck, Star, Sun, Trash2, Upload, Wifi, X,
 } from 'lucide-react'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
@@ -166,7 +166,7 @@ export default function App() {
     ]
   }
   const menuItems = (entry: Entry): MenuItem[] => {
-    const open: MenuItem = { label: entry.kind === 'folder' ? 'Open' : 'Preview', icon: entry.kind === 'folder' ? <Folder size={15} /> : <Image size={15} />, run: () => openFolder(entry) }
+    const open: MenuItem = { label: entry.kind === 'folder' ? 'Open' : 'Preview', icon: entry.kind === 'folder' ? <Folder size={15} /> : <Eye size={15} />, run: () => openFolder(entry) }
     const labels: Record<string, string> = {
       Favorite: entry.starred ? 'Remove from favorites' : 'Add to favorites',
       Offline: entry.pinned ? 'Remove offline copy' : 'Keep offline',

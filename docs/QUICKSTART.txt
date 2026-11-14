@@ -1,0 +1,50 @@
+pCloud Vault - quick start
+==========================
+
+pCloud Vault is a free, open-source Windows client for pCloud with a private,
+client-side encrypted vault. Made in Europe. Not affiliated with pCloud AG.
+
+REQUIREMENTS
+  Windows 11 x64 (WebView2 is included with Windows 11) and a pCloud account.
+
+GET STARTED
+  1. Install with "pCloud-Vault-<version>-setup.exe", or run
+     "pCloud Vault.exe" directly (portable, no installation needed).
+  2. The welcome guide opens on first start:
+     - Sign in on pCloud's website (email, Google, Apple or Facebook).
+     - Create your vault password (12+ characters). Nobody can recover it
+       for you, so keep it safe.
+     - Save a recovery key and store it offline.
+  3. Drag files into Private Vault. They are encrypted on your PC before
+     upload. Your originals stay where they are.
+
+  Windows SmartScreen may warn on first start because the app is not
+  code-signed yet. Choose "More info" -> "Run anyway" if you trust this
+  download. Check it against SHA256SUMS.txt first.
+
+ON ANOTHER PC
+  Install, sign in to the same pCloud account and enter your vault password
+  once. Your vault appears with all files.
+
+GOOD TO KNOW
+  - pCloud's own apps do not show the vault folder (".pcloud-vault"). Your
+    vault files appear only in this app, under their real names.
+  - "pCloud Files" shows your regular, unencrypted pCloud files.
+  - Closing the window keeps the app running in the tray. Use the tray
+    menu to lock or quit.
+
+RECOVERY WITHOUT THE APP
+  vault-recovery.exe verify "<vault folder>"
+  vault-recovery.exe export "<vault folder>" "<new output folder>"
+  Add --recovery to use your recovery key instead of the password.
+  See README.md for downloading a vault from pCloud first.
+
+VERIFY THIS DOWNLOAD
+  Compare file hashes with SHA256SUMS.txt (PowerShell: Get-FileHash <file>),
+  or, with the GitHub CLI:
+  gh attestation verify <file> --repo wouternijenhuis/pcloud-vault
+
+MORE
+  Source, issues and documentation:
+  https://github.com/wouternijenhuis/pcloud-vault
+  License: GPL-3.0-only (see LICENSE). Security: see SECURITY.md.

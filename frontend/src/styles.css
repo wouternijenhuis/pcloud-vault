@@ -118,3 +118,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, [role="button"]
 @media (max-width: 560px) { .wizard-steps li { font-size: 0; gap: 0; } .wizard-body { padding: 22px 20px; } }
 .app-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 16px 2px 0; color: #9a9eac; font-size: 9px; }
 .dark .app-origin { color: #9ba2b8; }
+/* Dark appearance: surfaces that previously kept their light colors. */
+.dark .workspace-link.selected, .dark .nav-link.selected { background: #30365a; color: #cbd1ff; }
+.dark .brand-mark, .dark .avatar { background: #2f3555; color: #aab4ff; }
+.dark .folder-icon { background: #2f3555; color: #9ea9f2; }
+.dark .doc-icon { background: #2c3145; color: #a7aec3; }
+.dark .photo-icon { background: #22352d; color: #8cc6aa; }
+.dark .storage-track { background: #34394d; }
+.dark .sidebar-rule { background: #34394d; }
+.dark .selection-bar button:not(.icon-button) { color: #b9c0f2; }
+.dark .selection-bar button:hover { color: #fff; }
+.dark .account { border-color: #34394d; }
+.dark .account-info strong { color: #d5d9e7; }
+.dark .account-info small { color: #9ba2b8; }
+.dark .search-box kbd { background: #23273a; border-color: #3a4055; color: #9ba2b8; }
+.dark .sync-button { border-color: #3a4055; }
+.dark .drop-hint { border-color: #3a4055; color: #9ba2b8; }

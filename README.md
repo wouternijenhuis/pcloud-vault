@@ -1,16 +1,60 @@
+<div align="center">
+
+<img src="src-tauri/icons/128x128.png" width="88" alt="">
+
 # pCloud Vault
 
-A standalone Windows 11 client for pCloud with a quiet, premium interface and local authenticated encryption. Browse and manage files inside the app. No filesystem driver, mounted drive, or separate encryption application is required.
+**A private, open-source Windows client for pCloud, with a client-side encrypted vault.**
+
+[![Latest release](https://img.shields.io/github/v/release/wouternijenhuis/pcloud-vault?label=download&color=6876d4)](https://github.com/wouternijenhuis/pcloud-vault/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-6876d4)](LICENSE)
+![Windows 11](https://img.shields.io/badge/Windows-11%20x64-6876d4)
+![Made in Europe](https://img.shields.io/badge/Made%20in-Europe-003399?labelColor=ffcc00)
+
+<img src="docs/screenshots/vault.png" width="820" alt="pCloud Vault showing the Private Vault with sample files">
+
+</div>
+
+Files you put in **Private Vault** are encrypted on your PC with your own password before anything is uploaded. pCloud only stores unreadable data with random names. Your regular pCloud files stay available next to it under **pCloud Files**, clearly marked as not encrypted.
+
+## Download
+
+1. Download **`pCloud-Vault-<version>-windows-x64.zip`** from the [latest release](https://github.com/wouternijenhuis/pcloud-vault/releases/latest).
+2. Run the installer inside, or start the portable **`pCloud Vault.exe`** directly.
+3. The welcome guide helps you sign in to pCloud and create your vault password.
+
+Requires Windows 11 x64 and a pCloud account. The app is not code-signed yet, so Windows SmartScreen may warn on first start: choose **More info → Run anyway** after checking the download against `SHA256SUMS.txt`. Every release also carries a [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations), which proves it was built from this repository:
+
+```powershell
+gh attestation verify pCloud-Vault-0.1.0-windows-x64.zip --repo wouternijenhuis/pcloud-vault
+```
+
+## Features
+
+- **End-to-end encrypted vault.** Files, file names and folders are encrypted on your PC before upload.
+- **Your existing pCloud files.** Browse, rename, move, download and trash them in the same app.
+- **Sign in on pCloud's own website**, including two-step verification and Google, Apple or Facebook sign-in. Your pCloud password never passes through this app.
+- **Several PCs.** Sign in on another PC, enter your vault password once, and your vault follows you. Simultaneous edits are kept as conflict copies, never silently overwritten.
+- **Offline access.** Keep files offline, with an encrypted local cache (10 GiB by default).
+- **Everyday comfort:** a welcome guide, drag and drop, right-click menus, search, image previews, favorites, trash and restore, light and dark themes.
+- **Remembered PCs.** Unlocks with your Windows sign-in. Your password is never stored.
+- **Recovery** with an offline recovery key and a stand-alone recovery tool.
+- **No ads, no tracking, no analytics.** All interface assets are bundled with the app.
+
+<p align="center">
+<img src="docs/screenshots/welcome.png" width="410" alt="The welcome guide shown on first start">
+<img src="docs/screenshots/dark-menu.png" width="410" alt="Dark appearance with the right-click menu open">
+</p>
 
 ## Getting started
 
-Run the Windows installer or the portable `pcloud-vault.exe`. Connect your pCloud account, then create or unlock Private Vault with one unique passphrase of at least 12 characters. Remembering the PC protects its unlock key with your Windows account and starts the app quietly at sign-in. Closing the window keeps transfers running in the tray; use the tray menu to open, lock, or quit.
+Connect pCloud with **Sign in on pCloud website**, then create or unlock your vault with a password of at least 12 characters. Remembering the PC protects its unlock key with your Windows account and starts the app quietly at sign-in. Closing the window keeps transfers running in the tray; use the tray menu to open, lock or quit.
 
-**Connecting pCloud:** choose **Sign in on pCloud website**. A separate private window shows pCloud's own sign-in page, including two-step verification, and no developer registration is needed. Alternatively, register your own personal-use OAuth application in pCloud's developer portal (pCloud may require manual approval) and use its public client ID with callback `http://127.0.0.1:43187/callback`. No client secret is embedded. You can also choose **Work locally** to create a real encrypted vault and import/export files on this PC only. See [pCloud setup](docs/PCLOUD_SETUP.md).
+Alternatively, register your own personal-use OAuth application in pCloud's developer portal (pCloud may require manual approval) and use its public client ID with callback `http://127.0.0.1:43187/callback`. No client secret is embedded. You can also choose **Use only this PC** to keep an encrypted vault on this PC only. See [pCloud setup](docs/PCLOUD_SETUP.md).
 
-Private Vault is separate from **pCloud Files**, which is explicitly unencrypted. Importing copies files and preserves the originals. Folder drag-and-drop imports are supported. Favorites, offline pins, encrypted caching, search, image previews, trash/restore, password changes, and recovery-key export are available inside the app. Ordinary cloud folders/files support browsing, rename, move, download, and trash; individual cloud files can be copied into Private Vault. Restore ordinary cloud deletions through pCloud's own Trash.
+Importing copies files and keeps the originals. Folder drag and drop is supported. Ordinary cloud files can be copied into Private Vault; restore ordinary cloud deletions through pCloud's own Trash.
 
-Exporting or choosing **Export and open** creates a decrypted copy at a location you choose. Exports never overwrite existing files. These explicit copies and the original files you imported remain outside the encrypted vault. The client does not leave decrypted working files in its managed cache.
+Exporting creates a decrypted copy at a location you choose and never overwrites existing files. Exported copies and the originals you imported stay outside the encrypted vault. The app leaves no decrypted working files in its own cache.
 
 ## Encryption and sync
 
@@ -63,14 +107,20 @@ pnpm build
 
 `pnpm preview` opens a clearly labeled **browser demo** using sample data; it never performs real cloud operations. `pnpm dev` starts the native Tauri app. For isolated manual QA, launch the native executable with `--data-dir <new-test-directory>`; this disables Windows startup registration for that run. Standard data is stored under the current user's application-data directory for `dev.pcloudvault.desktop`.
 
-Source license: GPL-3.0-only. No GitHub Actions workflows, deployment, publishing, or automatic updater are configured.
+Pull requests to `main` run the checks in [CI](.github/workflows/ci.yml). Merging a new version (see [CONTRIBUTING.md](CONTRIBUTING.md)) publishes a release through [release.yml](.github/workflows/release.yml). There is no automatic updater.
 
 ## Contributing
 
-This is a public repository. Read [CLAUDE.md](CLAUDE.md) (identical rules in [AGENTS.md](AGENTS.md)) before contributing, and enable the public-safety hooks once per clone:
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md). This is a public repository: [CLAUDE.md](CLAUDE.md) (the same rules are in [AGENTS.md](AGENTS.md)) lists what must never be committed. Enable the public-safety hooks once per clone:
 
 ```powershell
 git config core.hooksPath .githooks
 ```
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), never in public issues.
+
+## License
+
+[GPL-3.0-only](LICENSE). Made in Europe.
+
+pCloud Vault is an independent open-source project. It is not affiliated with, endorsed by or sponsored by pCloud AG. "pCloud" is a trademark of its owner and is used here only to describe compatibility.
