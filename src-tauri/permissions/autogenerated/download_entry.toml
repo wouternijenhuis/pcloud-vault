@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-download-entry"
+description = "Enables the download_entry command without any pre-configured scope."
+commands.allow = ["download_entry"]
+
+[[permission]]
+identifier = "deny-download-entry"
+description = "Denies the download_entry command without any pre-configured scope."
+commands.deny = ["download_entry"]

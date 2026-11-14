@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-connect-pcloud-web"
+description = "Enables the connect_pcloud_web command without any pre-configured scope."
+commands.allow = ["connect_pcloud_web"]
+
+[[permission]]
+identifier = "deny-connect-pcloud-web"
+description = "Denies the connect_pcloud_web command without any pre-configured scope."
+commands.deny = ["connect_pcloud_web"]

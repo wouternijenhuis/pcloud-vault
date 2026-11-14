@@ -1,0 +1,5 @@
+#!/bin/sh
+# Public repository guard: block personal data, local paths and secrets.
+shell=pwsh
+command -v pwsh >/dev/null 2>&1 || shell=powershell
+exec "$shell" -NoProfile -ExecutionPolicy Bypass -File scripts/check-public.ps1 -Staged
