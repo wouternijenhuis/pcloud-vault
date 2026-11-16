@@ -15,6 +15,7 @@ vault-core = { path = "../crates/vault-core" }
 pcloud-api = { path = "../crates/pcloud-api" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 zeroize = "1"
 base64 = "0.22"
 rfd = "0.15"

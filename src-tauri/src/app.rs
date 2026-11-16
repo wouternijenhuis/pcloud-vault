@@ -39,6 +39,15 @@ pub(crate) struct Settings {
     pub last_sync: Option<u64>,
     /// Salts of password wrappers this computer has superseded; never adopted again.
     pub retired_header_salts: Vec<String>,
+    /// "everything", "choose" or "vaultOnly"; None until the user chose (upgrade from 0.2).
+    pub protection: Option<String>,
+    /// "system", "light" or "dark".
+    pub theme: String,
+    /// Start in the background at sign-in while this computer is remembered.
+    pub start_at_login: bool,
+    pub jobs: Vec<crate::folders::FolderJob>,
+    /// File requests whose received files are moved into the Vault.
+    pub file_requests: Vec<crate::features::RequestRule>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -50,6 +59,11 @@ impl Default for Settings {
             object_cursor: None,
             last_sync: None,
             retired_header_salts: Vec::new(),
+            protection: None,
+            theme: "system".into(),
+            start_at_login: true,
+            jobs: Vec::new(),
+            file_requests: Vec::new(),
         }
     }
 }
@@ -88,6 +102,8 @@ pub(crate) struct Inner {
     pub syncing: AtomicBool,
     /// Vault entries currently being read; their chunks are protected from eviction.
     pub in_use: Mutex<std::collections::HashMap<String, usize>>,
+    pub transfers: crate::transfers::Transfers,
+    pub jobs: crate::jobs::JobRuntime,
 }
 #[derive(Clone)]
 pub struct AppState(pub(crate) Arc<Inner>);
@@ -225,13 +241,13 @@ impl Inner {
         } else if path.exists() {
             fs::remove_file(path).map_err(|e| e.to_string())?;
         }
-        set_startup(remember)?;
+        set_startup(remember && locked(&self.settings)?.start_at_login)?;
         Ok(())
     }
 }
 
 /// Starts the app in the background at sign-in while a device is remembered.
-fn set_startup(enabled: bool) -> AppResult<()> {
+pub(crate) fn set_startup(enabled: bool) -> AppResult<()> {
     if std::env::args().any(|arg| arg == "--data-dir") {
         return Ok(());
     }
@@ -349,7 +365,7 @@ fn desktop_exec_quote(argument: &str) -> String {
     exec_escaped.replace('\\', "\\\\")
 }
 
-async fn task<T: Send + 'static>(
+pub(crate) async fn task<T: Send + 'static>(
     state: &AppState,
     work: impl FnOnce(Arc<Inner>) -> AppResult<T> + Send + 'static,
 ) -> AppResult<T> {
@@ -636,7 +652,7 @@ async fn save_settings(
     .await
 }
 
-fn cloud_id(value: &str) -> AppResult<(u64, bool)> {
+pub(crate) fn cloud_id(value: &str) -> AppResult<(u64, bool)> {
     let (kind, number) = value.split_at_checked(1).ok_or("Invalid cloud entry")?;
     if !matches!(kind, "f" | "d") {
         return Err("Invalid cloud entry type".into());
@@ -946,7 +962,11 @@ async fn toggle_pin(state: State<'_, AppState>, id: String) -> AppResult<()> {
     .await
 }
 
-fn import_local(s: &Arc<Inner>, paths: Vec<PathBuf>, parent: Option<String>) -> AppResult<()> {
+pub(crate) fn import_local(
+    s: &Arc<Inner>,
+    paths: Vec<PathBuf>,
+    parent: Option<String>,
+) -> AppResult<()> {
     let paths = paths
         .into_iter()
         .map(|path| {
@@ -959,7 +979,13 @@ fn import_local(s: &Arc<Inner>, paths: Vec<PathBuf>, parent: Option<String>) -> 
         .collect::<AppResult<Vec<_>>>()?;
     let mut vault = locked(&s.vault)?;
     let vault = vault.as_mut().ok_or("Unlock your vault first")?;
-    fn walk(vault: &mut Vault, path: &Path, parent: Option<&str>, depth: usize) -> AppResult<()> {
+    fn walk(
+        transfers: &crate::transfers::Transfers,
+        vault: &mut Vault,
+        path: &Path,
+        parent: Option<&str>,
+        depth: usize,
+    ) -> AppResult<()> {
         if depth > 128 {
             return Err("Folder import exceeds the supported depth.".into());
         }
@@ -979,6 +1005,7 @@ fn import_local(s: &Arc<Inner>, paths: Vec<PathBuf>, parent: Option<String>) -> 
                 .map_err(|e| e.to_string())?;
             for child in fs::read_dir(path).map_err(|e| e.to_string())? {
                 walk(
+                    transfers,
                     vault,
                     &child.map_err(|e| e.to_string())?.path(),
                     Some(&folder.id),
@@ -986,16 +1013,25 @@ fn import_local(s: &Arc<Inner>, paths: Vec<PathBuf>, parent: Option<String>) -> 
                 )?;
             }
         } else if metadata.is_file() {
-            vault
-                .import_file(parent, name, File::open(path).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+            transfers.track(
+                name,
+                crate::transfers::Direction::Upload,
+                true,
+                metadata.len(),
+                || {
+                    vault
+                        .import_file(parent, name, File::open(path).map_err(|e| e.to_string())?)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                },
+            )?;
         } else {
             return Err("Only regular files and folders can be imported.".into());
         }
         Ok(())
     }
     for path in paths {
-        walk(vault, &path, parent.as_deref(), 0)?;
+        walk(&s.transfers, vault, &path, parent.as_deref(), 0)?;
     }
     s.log(
         "Import saved locally with encryption. Originals were preserved.",
@@ -1006,7 +1042,7 @@ fn import_local(s: &Arc<Inner>, paths: Vec<PathBuf>, parent: Option<String>) -> 
 
 /// Canonical path for containment checks. Windows and macOS file systems are
 /// case-insensitive by default, so compare those case-insensitively.
-fn path_key(path: &Path) -> PathBuf {
+pub(crate) fn path_key(path: &Path) -> PathBuf {
     if cfg!(any(windows, target_os = "macos")) {
         PathBuf::from(path.to_string_lossy().to_lowercase())
     } else {
@@ -1014,7 +1050,7 @@ fn path_key(path: &Path) -> PathBuf {
     }
 }
 
-fn outside_storage(s: &Inner, path: &Path) -> AppResult<()> {
+pub(crate) fn outside_storage(s: &Inner, path: &Path) -> AppResult<()> {
     let candidate = if path.exists() {
         fs::canonicalize(path).map_err(|e| e.to_string())?
     } else {
@@ -1060,7 +1096,7 @@ fn choose_vault_export(s: &Arc<Inner>, id: &str) -> AppResult<Option<PathBuf>> {
     Ok(Some(path))
 }
 
-fn export_vault_to(s: &Inner, id: &str, destination: &Path) -> AppResult<()> {
+pub(crate) fn export_vault_to(s: &Inner, id: &str, destination: &Path) -> AppResult<()> {
     let vault = locked(&s.vault)?;
     let vault = vault.as_ref().ok_or("Unlock your vault first")?;
     let entry = vault.entry(id).map_err(|e| e.to_string())?;
@@ -1129,23 +1165,63 @@ async fn import_cloud_file(
     task(&state, move |s| {
         let client = s.client()?; let (id, folder) = cloud_id(&id)?; cloud_safe(&s, &client, id, folder)?;
         if folder { return Err("Import individual pCloud files, or download the folder and drag it into Private Vault.".into()); }
-        let metadata = client.stat(id, false).map_err(|e| e.to_string())?;
-        let (reader, mut writer) = os_pipe::pipe().map_err(|e| e.to_string())?;
-        let download = std::thread::spawn(move || client.download_to(id, &mut writer));
-        let result = {
-            let mut vault = locked(&s.vault)?; let vault = vault.as_mut().ok_or("Unlock your vault first")?;
-            let imported = vault.import_file(parent_id.as_deref(), &metadata.name, reader).map_err(|e| e.to_string());
-            let transferred = download.join().map_err(|_| "Cloud import interrupted".to_string())?.map_err(|e| e.to_string());
-            match (imported, transferred) {
-                (Ok(entry), Ok(size)) if size == metadata.size && entry.size == size => Ok(()),
-                (Ok(entry), _) => { vault.set_trashed(&entry.id, true).map_err(|e| e.to_string())?; Err("Import was incomplete; the original remains untouched.".into()) },
-                (Err(error), _) => Err(error),
-            }
-        };
-        result?;
+        import_cloud_into_vault(&s, client, id, parent_id.as_deref(), false)?;
         replication::sync(&s)?;
         s.log("Imported and verified an encrypted cloud copy. Original preserved.", "success"); Ok(())
     }).await
+}
+
+/// Streams one pCloud file into the vault and verifies its size before keeping it.
+pub(crate) fn import_cloud_into_vault(
+    s: &Arc<Inner>,
+    client: Client,
+    id: u64,
+    parent_id: Option<&str>,
+    rename_if_taken: bool,
+) -> AppResult<Entry> {
+    let metadata = client.stat(id, false).map_err(|e| e.to_string())?;
+    let tracker = s.transfers.start(
+        &metadata.name,
+        crate::transfers::Direction::Upload,
+        true,
+        metadata.size,
+    );
+    let (reader, mut writer) = os_pipe::pipe().map_err(|e| e.to_string())?;
+    let download = std::thread::spawn(move || client.download_to(id, &mut writer));
+    let result = {
+        let mut vault = locked(&s.vault)?;
+        let vault = vault.as_mut().ok_or("Unlock your vault first")?;
+        let name = if rename_if_taken {
+            let taken: Vec<String> = vault
+                .list(parent_id, false)
+                .into_iter()
+                .map(|e| e.name)
+                .collect();
+            crate::jobs::unique_name(&metadata.name, &taken)
+        } else {
+            metadata.name.clone()
+        };
+        let imported = vault
+            .import_file(parent_id, &name, reader)
+            .map_err(|e| e.to_string());
+        let transferred = download
+            .join()
+            .map_err(|_| "Cloud import interrupted".to_string())?
+            .map_err(|e| e.to_string());
+        match (imported, transferred) {
+            (Ok(entry), Ok(size)) if size == metadata.size && entry.size == size => Ok(entry),
+            (Ok(entry), _) => {
+                vault
+                    .set_trashed(&entry.id, true)
+                    .map_err(|e| e.to_string())?;
+                Err("Import was incomplete; the original remains untouched.".to_string())
+            }
+            (Err(error), _) => Err(error),
+        }
+    };
+    s.transfers
+        .finish(&tracker, &result.as_ref().map(|_| ()).map_err(Clone::clone));
+    result
 }
 
 #[tauri::command]
@@ -1214,60 +1290,62 @@ async fn preview_entry(
     location: String,
     id: String,
 ) -> AppResult<Option<String>> {
-    task(&state, move |s| {
-        const MAX: u64 = 20 * 1024 * 1024;
-        let mut bytes = Zeroizing::new(Vec::new());
-        if location == "vault" {
-            let _in_use = replication::ensure_file(&s, &id)?;
-            let vault = locked(&s.vault)?;
-            let vault = vault.as_ref().ok_or("Unlock your vault first")?;
-            let entry = vault.entry(&id).map_err(|e| e.to_string())?;
-            if entry.kind == EntryKind::Folder || entry.size > MAX {
-                return Ok(None);
-            }
-            bytes.resize(entry.size as usize, 0);
-            let mut offset = 0;
-            while offset < bytes.len() {
-                let count = vault
-                    .read(&id, offset as u64, &mut bytes[offset..])
-                    .map_err(|e| e.to_string())?;
-                if count == 0 {
-                    return Err("Preview is incomplete".into());
-                }
-                offset += count;
-            }
-        } else if location == "cloud" {
-            let client = s.client()?;
-            let (id, folder) = cloud_id(&id)?;
-            cloud_safe(&s, &client, id, folder)?;
-            if folder || client.stat(id, false).map_err(|e| e.to_string())?.size > MAX {
-                return Ok(None);
-            }
-            let mut writer = replication::BoundedWriter::new(MAX as usize);
-            client
-                .download_to(id, &mut writer)
-                .map_err(|e| e.to_string())?;
-            *bytes = writer.into_inner();
-        } else {
-            return Err("Unknown storage location".into());
-        }
-        let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-            "image/png"
-        } else if bytes.starts_with(b"\xff\xd8\xff") {
-            "image/jpeg"
-        } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-            "image/gif"
-        } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-            "image/webp"
-        } else {
+    task(&state, move |s| preview_data(&s, &location, &id)).await
+}
+
+/// Image bytes as a data URL for previews and thumbnails (PNG, JPEG, GIF, WebP up to 20 MiB).
+pub(crate) fn preview_data(s: &Arc<Inner>, location: &str, id: &str) -> AppResult<Option<String>> {
+    const MAX: u64 = 20 * 1024 * 1024;
+    let mut bytes = Zeroizing::new(Vec::new());
+    if location == "vault" {
+        let _in_use = replication::ensure_file(s, id)?;
+        let vault = locked(&s.vault)?;
+        let vault = vault.as_ref().ok_or("Unlock your vault first")?;
+        let entry = vault.entry(id).map_err(|e| e.to_string())?;
+        if entry.kind == EntryKind::Folder || entry.size > MAX {
             return Ok(None);
-        };
-        Ok(Some(format!(
-            "data:{mime};base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes.as_slice())
-        )))
-    })
-    .await
+        }
+        bytes.resize(entry.size as usize, 0);
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let count = vault
+                .read(id, offset as u64, &mut bytes[offset..])
+                .map_err(|e| e.to_string())?;
+            if count == 0 {
+                return Err("Preview is incomplete".into());
+            }
+            offset += count;
+        }
+    } else if location == "cloud" {
+        let client = s.client()?;
+        let (id, folder) = cloud_id(id)?;
+        cloud_safe(s, &client, id, folder)?;
+        if folder || client.stat(id, false).map_err(|e| e.to_string())?.size > MAX {
+            return Ok(None);
+        }
+        let mut writer = replication::BoundedWriter::new(MAX as usize);
+        client
+            .download_to(id, &mut writer)
+            .map_err(|e| e.to_string())?;
+        *bytes = writer.into_inner();
+    } else {
+        return Err("Unknown storage location".into());
+    }
+    let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        "image/jpeg"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        "image/gif"
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes.as_slice())
+    )))
 }
 #[tauri::command]
 async fn sync_now(state: State<'_, AppState>) -> AppResult<()> {
@@ -1397,6 +1475,8 @@ pub fn run() {
                 activity: Mutex::new(VecDeque::new()),
                 syncing: AtomicBool::new(false),
                 in_use: Mutex::default(),
+                transfers: Default::default(),
+                jobs: Default::default(),
             });
             if let Ok(blob) = fs::read(inner.directory.join("device.key")) {
                 if let Ok(bytes) = pcloud_api::device_protection::unprotect(&blob) {
@@ -1450,15 +1530,30 @@ pub fn run() {
                 }
             }
             let startup = inner.clone();
-            std::thread::spawn(move || loop {
-                if locked(&startup.account).is_ok_and(|a| a.is_some())
-                    && locked(&startup.vault).is_ok_and(|v| v.is_some())
-                {
-                    if let Err(error) = replication::sync(&startup) {
-                        startup.log(&error, "error");
+            std::thread::spawn(move || {
+                let mut round: u64 = 0;
+                loop {
+                    let connected = locked(&startup.account).is_ok_and(|a| a.is_some());
+                    if connected && locked(&startup.vault).is_ok_and(|v| v.is_some()) {
+                        if let Err(error) = replication::sync(&startup) {
+                            startup.log(&error, "error");
+                        }
+                        // About every two minutes: encrypt files received by file requests.
+                        if round.is_multiple_of(8) {
+                            if let Err(error) = crate::features::encrypt_received(&startup) {
+                                startup.log(&error, "error");
+                            }
+                        }
                     }
+                    round += 1;
+                    std::thread::sleep(std::time::Duration::from_secs(15));
                 }
-                std::thread::sleep(std::time::Duration::from_secs(15));
+            });
+            let scheduler = inner.clone();
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                crate::jobs::tick(&scheduler, &handle);
             });
             Ok(())
         })
@@ -1494,7 +1589,38 @@ pub fn run() {
             sync_now,
             change_password,
             export_recovery,
-            get_activity
+            get_activity,
+            crate::features::get_preferences,
+            crate::features::set_preferences,
+            crate::features::account_info,
+            crate::features::known_folders,
+            crate::features::pick_folder,
+            crate::features::open_url,
+            crate::features::upload_paths,
+            crate::features::upload_files,
+            crate::features::upload_folder,
+            crate::features::get_transfers,
+            crate::features::clear_transfers,
+            crate::features::list_photos,
+            crate::features::photo_thumb,
+            crate::features::list_links,
+            crate::features::create_link,
+            crate::features::delete_link,
+            crate::features::list_shares,
+            crate::features::share_folder,
+            crate::features::accept_share,
+            crate::features::decline_share,
+            crate::features::remove_share,
+            crate::features::list_file_requests,
+            crate::features::create_file_request,
+            crate::features::delete_file_request,
+            crate::jobs::list_jobs,
+            crate::jobs::add_job,
+            crate::jobs::update_job,
+            crate::jobs::remove_job,
+            crate::jobs::run_job,
+            crate::jobs::resolve_guard,
+            crate::jobs::open_recycle
         ])
         .build(tauri::generate_context!())
         .expect("Unable to start pCloud Vault")
@@ -1541,6 +1667,8 @@ mod tests {
             activity: Mutex::new(VecDeque::new()),
             syncing: AtomicBool::new(false),
             in_use: Mutex::default(),
+            transfers: Default::default(),
+            jobs: Default::default(),
         });
         *inner.vault.lock().unwrap() =
             Some(Vault::create(&inner.vault_path(), "test-only-long-passphrase").unwrap());
