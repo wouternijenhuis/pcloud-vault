@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-decline-share"
+description = "Enables the decline_share command without any pre-configured scope."
+commands.allow = ["decline_share"]
+
+[[permission]]
+identifier = "deny-decline-share"
+description = "Denies the decline_share command without any pre-configured scope."
+commands.deny = ["decline_share"]

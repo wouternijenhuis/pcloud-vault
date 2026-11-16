@@ -11,7 +11,8 @@ pCloud Vault uses a new, **unaudited** vault protocol built on established primi
 ## Protection boundary
 
 - Cloud storage receives only encrypted vault objects, but the provider can still observe object sizes, counts, and access timing.
-- Files under **pCloud Files** are ordinary, unencrypted account files.
+- Files under **pCloud Files** are ordinary, unencrypted account files. So are backups and syncs to pCloud, uploads to pCloud, public links, shared folders, and files received through file requests (until the app moves them into the Vault, after which the plain copy sits in the pCloud trash).
+- Backup and sync indexes of Vault jobs are encrypted at rest; the local folder paths of jobs and the app's recycle folder of files removed by a sync are not.
 - The pCloud sign-in token (an OAuth token, or a full website session token when you use website sign-in) is protected per user and computer: with current-user DPAPI on Windows, and on macOS and Linux with XChaCha20-Poly1305 under a random device key kept in the login Keychain or the Secret Service keyring. Anyone who can run code as your user (with the keyring unlocked) can use it. Forgetting the computer logs a website session out at pCloud.
 - An unlocked vault in a trusted user session is accessible to that user's processes. Exported or opened decrypted copies, malware, and operating-system paging are outside the protection boundary.
 - A password change rewraps the vault key. It does not revoke previously trusted computers or older wrapped keys kept in cloud history.

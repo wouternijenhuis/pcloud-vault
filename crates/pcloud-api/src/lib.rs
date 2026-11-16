@@ -19,6 +19,7 @@ use zeroize::Zeroize;
 
 pub type Result<T> = std::result::Result<T, Error>;
 const MAX_API_RESPONSE: u64 = 64 * 1024 * 1024;
+const MAX_THUMBNAIL: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -44,6 +45,8 @@ pub enum Error {
     Integrity,
     #[error("Invalid filename.")]
     InvalidName,
+    #[error("Invalid email address, comment, or option.")]
+    InvalidInput,
     #[error("The local file could not be read or written.")]
     Io,
     #[error("A registered pCloud OAuth client ID is required.")]
@@ -169,6 +172,9 @@ pub struct Metadata {
     pub parent_folder_id: u64,
     pub size: u64,
     pub modified: u64,
+    /// pCloud content hash; changes whenever the file content changes. Absent for folders.
+    #[serde(default)]
+    pub hash: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +184,49 @@ pub struct UserInfo {
     pub email: String,
     pub quota: u64,
     pub used_quota: u64,
+    #[serde(default)]
+    pub premium: bool,
+}
+
+// Response shapes below follow docs.pcloud.com but are parsed defensively: optional fields
+// default, unknown fields are ignored, and timestamps may arrive as numbers or strings.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicLink {
+    pub link_id: u64,
+    pub code: String,
+    pub url: String,
+    pub file_id: Option<u64>,
+    pub folder_id: Option<u64>,
+    pub name: String,
+    pub created: String,
+    pub downloads: u64,
+    pub is_folder: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareInfo {
+    pub id: u64,
+    pub is_request: bool,
+    pub incoming: bool,
+    pub folder_id: Option<u64>,
+    pub folder_name: String,
+    pub email: String,
+    pub can_modify: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadLink {
+    pub id: u64,
+    pub code: String,
+    pub url: String,
+    pub folder_id: u64,
+    pub comment: String,
+    pub expires: Option<String>,
+    pub max_files: Option<u64>,
+    pub files: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -263,6 +312,10 @@ impl Client {
             email: required_str(&value, "email")?.into(),
             quota: required_u64(&value, "quota")?,
             used_quota: required_u64(&value, "usedquota")?,
+            premium: value
+                .get("premium")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     }
 
@@ -523,14 +576,7 @@ impl Client {
                 ("skipfilename", "1".into()),
             ],
         )?;
-        let host = value
-            .get("hosts")
-            .and_then(Value::as_array)
-            .and_then(|v| v.first())
-            .and_then(Value::as_str)
-            .ok_or(Error::InvalidResponse)?;
-        let path = required_str(&value, "path")?;
-        let url = validate_download_url(host, path)?;
+        let url = link_url(&value)?;
         // This client has no default bearer headers or cookies. The signed URL is the sole credential.
         let mut response = self
             .http
@@ -542,6 +588,144 @@ impl Client {
             return Err(Error::Http(response.status().as_u16()));
         }
         io::copy(&mut response, writer).map_err(|_| Error::Io)
+    }
+
+    /// Fetches a cropped thumbnail (for example `"256x256"`) of at most 4 MiB.
+    pub fn thumbnail(&self, file_id: u64, size: &str) -> Result<Vec<u8>> {
+        validate_thumbnail_size(size)?;
+        let value = self.call(
+            "getthumblink",
+            &[
+                ("fileid", file_id.to_string()),
+                ("size", size.into()),
+                ("crop", "1".into()),
+            ],
+        )?;
+        let url = link_url(&value)?;
+        let response = self
+            .http
+            .get(url)
+            .timeout(Duration::from_secs(60))
+            .send()
+            .map_err(|_| Error::Network)?;
+        if !response.status().is_success() {
+            return Err(Error::Http(response.status().as_u16()));
+        }
+        let mut bytes = Vec::new();
+        response
+            .take(MAX_THUMBNAIL + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| Error::Network)?;
+        if bytes.len() as u64 > MAX_THUMBNAIL {
+            return Err(Error::InvalidResponse);
+        }
+        Ok(bytes)
+    }
+
+    pub fn create_file_link(&self, file_id: u64) -> Result<PublicLink> {
+        let value = self.call("getfilepublink", &[("fileid", file_id.to_string())])?;
+        let mut link = parse_public_link(&value)?;
+        link.file_id.get_or_insert(file_id);
+        link.is_folder = false;
+        Ok(link)
+    }
+
+    pub fn create_folder_link(&self, folder_id: u64) -> Result<PublicLink> {
+        let value = self.call("getfolderpublink", &[("folderid", folder_id.to_string())])?;
+        let mut link = parse_public_link(&value)?;
+        link.folder_id.get_or_insert(folder_id);
+        link.is_folder = true;
+        Ok(link)
+    }
+
+    pub fn list_links(&self) -> Result<Vec<PublicLink>> {
+        parse_public_links(&self.call("listpublinks", &[])?)
+    }
+
+    pub fn delete_link(&self, link_id: u64) -> Result<()> {
+        self.call("deletepublink", &[("linkid", link_id.to_string())])
+            .map(|_| ())
+    }
+
+    pub fn list_shares(&self) -> Result<Vec<ShareInfo>> {
+        parse_shares(&self.call("listshares", &[])?)
+    }
+
+    pub fn share_folder(&self, folder_id: u64, email: &str, can_modify: bool) -> Result<()> {
+        validate_email(email)?;
+        self.call(
+            "sharefolder",
+            &[
+                ("folderid", folder_id.to_string()),
+                ("mail", email.into()),
+                // pCloud bitmask: 1 create, 2 modify, 4 delete; 0 is view-only.
+                ("permissions", if can_modify { "7" } else { "0" }.into()),
+            ],
+        )
+        .map(|_| ())
+    }
+
+    pub fn accept_share(&self, request_id: u64) -> Result<()> {
+        self.call("acceptshare", &[("sharerequestid", request_id.to_string())])
+            .map(|_| ())
+    }
+
+    pub fn decline_share(&self, request_id: u64) -> Result<()> {
+        self.call(
+            "declineshare",
+            &[("sharerequestid", request_id.to_string())],
+        )
+        .map(|_| ())
+    }
+
+    pub fn cancel_share_request(&self, request_id: u64) -> Result<()> {
+        self.call(
+            "cancelsharerequest",
+            &[("sharerequestid", request_id.to_string())],
+        )
+        .map(|_| ())
+    }
+
+    pub fn remove_share(&self, share_id: u64) -> Result<()> {
+        self.call("removeshare", &[("shareid", share_id.to_string())])
+            .map(|_| ())
+    }
+
+    /// `expire` is a datetime string accepted by pCloud (for example `2030-01-31T12:00:00`).
+    pub fn create_upload_link(
+        &self,
+        folder_id: u64,
+        comment: &str,
+        expire: Option<&str>,
+        max_files: Option<u64>,
+    ) -> Result<UploadLink> {
+        validate_comment(comment)?;
+        let mut parameters = vec![
+            ("folderid", folder_id.to_string()),
+            ("comment", comment.into()),
+        ];
+        if let Some(expire) = expire {
+            validate_expire(expire)?;
+            parameters.push(("expire", expire.into()));
+        }
+        if let Some(max_files) = max_files {
+            parameters.push(("maxfiles", max_files.to_string()));
+        }
+        let value = self.call("createuploadlink", &parameters)?;
+        let mut link = parse_upload_link(&value)?;
+        if link.folder_id == 0 {
+            link.folder_id = folder_id;
+        }
+        Ok(link)
+    }
+
+    pub fn list_upload_links(&self) -> Result<Vec<UploadLink>> {
+        parse_upload_links(&self.call("listuploadlinks", &[])?)
+    }
+
+    pub fn delete_upload_link(&self, id: u64) -> Result<()> {
+        self.call("deleteuploadlink", &[("uploadlinkid", id.to_string())])
+            .map(|_| ())
     }
 
     /// Returns up to [`DIFF_PAGE_SIZE`] events after `cursor`, or only the current position
@@ -629,7 +813,186 @@ fn parse_metadata(value: &Value) -> Result<Metadata> {
             .unwrap_or(0),
         size: value.get("size").and_then(Value::as_u64).unwrap_or(0),
         modified: value.get("modified").and_then(Value::as_u64).unwrap_or(0),
+        hash: value.get("hash").and_then(Value::as_u64),
     })
+}
+/// Builds a validated download URL from a `hosts` + `path` link response.
+fn link_url(value: &Value) -> Result<Url> {
+    let host = value
+        .get("hosts")
+        .and_then(Value::as_array)
+        .and_then(|v| v.first())
+        .and_then(Value::as_str)
+        .ok_or(Error::InvalidResponse)?;
+    validate_download_url(host, required_str(value, "path")?)
+}
+fn optional_string(value: &Value, key: &str) -> Option<String> {
+    match value.get(key)? {
+        Value::String(text) if !text.is_empty() => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+fn parse_public_link(value: &Value) -> Result<PublicLink> {
+    let metadata = value.get("metadata").filter(|m| m.is_object());
+    let is_folder = metadata
+        .and_then(|m| m.get("isfolder"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let item_id = |key: &str| {
+        metadata
+            .and_then(|m| m.get(key))
+            .and_then(Value::as_u64)
+            .or_else(|| value.get(key).and_then(Value::as_u64))
+    };
+    Ok(PublicLink {
+        link_id: required_u64(value, "linkid")?,
+        code: optional_string(value, "code").unwrap_or_default(),
+        url: optional_string(value, "link").unwrap_or_default(),
+        file_id: if is_folder { None } else { item_id("fileid") },
+        folder_id: if is_folder { item_id("folderid") } else { None },
+        name: metadata
+            .and_then(|m| m.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        created: optional_string(value, "created").unwrap_or_default(),
+        downloads: value.get("downloads").and_then(Value::as_u64).unwrap_or(0),
+        is_folder,
+    })
+}
+fn parse_public_links(value: &Value) -> Result<Vec<PublicLink>> {
+    value
+        .get("publinks")
+        .and_then(Value::as_array)
+        .ok_or(Error::InvalidResponse)?
+        .iter()
+        .map(parse_public_link)
+        .collect()
+}
+fn parse_shares(value: &Value) -> Result<Vec<ShareInfo>> {
+    let mut shares = Vec::new();
+    for (section, is_request) in [("shares", false), ("requests", true)] {
+        let Some(section) = value.get(section) else {
+            continue;
+        };
+        for (direction, incoming) in [("incoming", true), ("outgoing", false)] {
+            let Some(items) = section.get(direction) else {
+                continue;
+            };
+            for item in items.as_array().ok_or(Error::InvalidResponse)? {
+                shares.push(parse_share(item, is_request, incoming)?);
+            }
+        }
+    }
+    Ok(shares)
+}
+fn parse_share(value: &Value, is_request: bool, incoming: bool) -> Result<ShareInfo> {
+    let flag = |key: &str| {
+        value
+            .get("permissions")
+            .and_then(|p| p.get(key))
+            .or_else(|| value.get(key))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    // Incoming entries name the sender, outgoing entries the recipient.
+    let email_key = if incoming { "frommail" } else { "tomail" };
+    Ok(ShareInfo {
+        id: required_u64(
+            value,
+            if is_request {
+                "sharerequestid"
+            } else {
+                "shareid"
+            },
+        )?,
+        is_request,
+        incoming,
+        folder_id: value.get("folderid").and_then(Value::as_u64),
+        folder_name: value
+            .get("sharename")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        email: value
+            .get(email_key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        can_modify: flag("canmodify") || flag("cancreate") || flag("candelete"),
+    })
+}
+fn parse_upload_link(value: &Value) -> Result<UploadLink> {
+    Ok(UploadLink {
+        id: required_u64(value, "uploadlinkid").or_else(|_| required_u64(value, "id"))?,
+        code: optional_string(value, "code").unwrap_or_default(),
+        url: optional_string(value, "link").unwrap_or_default(),
+        // listuploadlinks nests the target folder in `metadata`; createuploadlink may not.
+        folder_id: value
+            .get("folderid")
+            .or_else(|| value.get("metadata").and_then(|m| m.get("folderid")))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        comment: value
+            .get("comment")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        expires: optional_string(value, "expire").or_else(|| optional_string(value, "expires")),
+        max_files: value
+            .get("maxfiles")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0),
+        files: value
+            .get("files")
+            .and_then(|f| f.as_u64().or_else(|| f.as_array().map(|a| a.len() as u64)))
+            .unwrap_or(0),
+    })
+}
+fn parse_upload_links(value: &Value) -> Result<Vec<UploadLink>> {
+    value
+        .get("links")
+        .or_else(|| value.get("uploadlinks"))
+        .and_then(Value::as_array)
+        .ok_or(Error::InvalidResponse)?
+        .iter()
+        .map(parse_upload_link)
+        .collect()
+}
+fn validate_email(email: &str) -> Result<()> {
+    if email.is_empty()
+        || email.len() >= 255
+        || !email.contains('@')
+        || email.chars().any(char::is_control)
+    {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+fn validate_comment(comment: &str) -> Result<()> {
+    if comment.len() >= 1000 || comment.chars().any(char::is_control) {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+fn validate_expire(expire: &str) -> Result<()> {
+    if expire.is_empty() || expire.len() > 64 || expire.chars().any(char::is_control) {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+fn validate_thumbnail_size(size: &str) -> Result<()> {
+    let valid = size.split_once('x').is_some_and(|(w, h)| {
+        [w, h]
+            .iter()
+            .all(|n| !n.is_empty() && n.len() <= 4 && n.bytes().all(|b| b.is_ascii_digit()))
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::InvalidInput)
+    }
 }
 fn flatten_metadata(value: &Value, output: &mut Vec<Metadata>, depth: usize) -> Result<()> {
     if depth > 256 || output.len() > 500_000 {
@@ -739,6 +1102,98 @@ mod tests {
         assert_eq!(item.modified, 123);
         assert_eq!(item.name, "契約書.txt");
         assert!(parse_metadata(&json!({"isfolder":true,"folderid":-1})).is_err());
+    }
+    #[test]
+    fn metadata_hash_is_optional() {
+        let file =
+            parse_metadata(&json!({"isfolder":false,"fileid":1,"hash":18446744073709551615u64}))
+                .unwrap();
+        assert_eq!(file.hash, Some(u64::MAX));
+        let folder = parse_metadata(&json!({"isfolder":true,"folderid":2})).unwrap();
+        assert_eq!(folder.hash, None);
+    }
+    #[test]
+    fn public_links_parse_files_and_folders() {
+        let links = parse_public_links(&json!({"result":0,"publinks":[
+            {"linkid":11,"code":"XYZ","link":"https://u.pcloud.link/publink/show?code=XYZ","created":1700000000,"downloads":3,"extra":true,
+             "metadata":{"isfolder":false,"fileid":5,"name":"a.txt"}},
+            {"linkid":12,"code":"ABC","link":"https://u.pcloud.link/publink/show?code=ABC","created":"2030-01-01",
+             "metadata":{"isfolder":true,"folderid":6,"name":"dir"}}]}))
+        .unwrap();
+        assert_eq!(links[0].file_id, Some(5));
+        assert_eq!(links[0].folder_id, None);
+        assert_eq!(links[0].created, "1700000000");
+        assert_eq!(links[0].downloads, 3);
+        assert!(links[1].is_folder);
+        assert_eq!(links[1].folder_id, Some(6));
+        assert_eq!(links[1].downloads, 0);
+        assert!(parse_public_links(&json!({"result":0})).is_err());
+        let created = parse_public_link(&json!({"result":0,"linkid":13,"code":"Q","link":"https://u.pcloud.link/publink/show?code=Q"})).unwrap();
+        assert_eq!(created.file_id, None);
+    }
+    #[test]
+    fn shares_and_requests_parse_in_both_directions() {
+        let shares = parse_shares(&json!({"result":0,
+            "shares":{"incoming":[{"shareid":1,"folderid":10,"sharename":"Docs","frommail":"a@example.com","permissions":{"canread":true,"canmodify":true}}],
+                      "outgoing":[{"shareid":2,"folderid":11,"sharename":"Pics","tomail":"b@example.com","canread":true}]},
+            "requests":{"incoming":[{"sharerequestid":3,"sharename":"Req","frommail":"c@example.com","permissions":{"cancreate":true}}],
+                        "outgoing":[{"sharerequestid":4,"folderid":12,"sharename":"Out","tomail":"d@example.com"}]}})).unwrap();
+        assert_eq!(shares.len(), 4);
+        assert_eq!(shares[0].id, 1);
+        assert!(shares[0].incoming && !shares[0].is_request && shares[0].can_modify);
+        assert_eq!(shares[0].email, "a@example.com");
+        assert_eq!(shares[1].email, "b@example.com");
+        assert!(!shares[1].can_modify);
+        assert!(shares[2].is_request && shares[2].can_modify && shares[2].folder_id.is_none());
+        assert_eq!((shares[3].id, shares[3].incoming), (4, false));
+        assert!(parse_shares(&json!({"result":0})).unwrap().is_empty());
+        assert!(parse_shares(&json!({"shares":{"incoming":[{"folderid":1}]}})).is_err());
+    }
+    #[test]
+    fn upload_links_parse_optional_limits() {
+        let links = parse_upload_links(&json!({"result":0,"links":[
+            {"uploadlinkid":7,"code":"UP1","link":"https://u.pcloud.link/puplink/show?code=UP1","folderid":9,"comment":"Send files","expires":"2030-01-01T00:00:00","maxfiles":5,"files":2},
+            {"uploadlinkid":8,"code":"UP2","link":"https://u.pcloud.link/puplink/show?code=UP2","folderid":9}]}))
+        .unwrap();
+        assert_eq!(links[0].max_files, Some(5));
+        assert_eq!(links[0].files, 2);
+        assert_eq!(links[0].expires.as_deref(), Some("2030-01-01T00:00:00"));
+        assert_eq!(links[1].max_files, None);
+        assert_eq!(links[1].expires, None);
+        assert_eq!(links[1].files, 0);
+        assert!(parse_upload_links(&json!({"result":0})).is_err());
+    }
+    #[test]
+    fn share_and_link_inputs_are_validated() {
+        assert!(validate_email("user@example.com").is_ok());
+        let long = format!("{}@example.com", "a".repeat(260));
+        for bad in ["", "no-at-sign", "a@example.com\n", long.as_str()] {
+            assert!(validate_email(bad).is_err());
+        }
+        assert!(validate_comment("").is_ok());
+        assert!(validate_comment("ok").is_ok());
+        assert!(validate_comment("bad\ttab").is_err());
+        assert!(validate_comment(&"a".repeat(1000)).is_err());
+        assert!(validate_thumbnail_size("256x256").is_ok());
+        for bad in ["256", "x", "256x", "a x1", "256x256&crop=0"] {
+            assert!(validate_thumbnail_size(bad).is_err());
+        }
+    }
+    #[test]
+    fn thumbnail_links_use_the_download_host_allow_list() {
+        let ok = json!({"hosts":["c1.pcloud.com"],"path":"/thumb/x.jpg"});
+        assert!(link_url(&ok).is_ok());
+        let evil = json!({"hosts":["attacker.test"],"path":"/thumb/x.jpg"});
+        assert!(matches!(link_url(&evil), Err(Error::UnsafeDownload)));
+    }
+    #[test]
+    fn share_folder_sends_permission_bitmask() {
+        let (client, request) = mock_client(json!({"result":0}).to_string());
+        client.share_folder(7, "user@example.com", true).unwrap();
+        let text = String::from_utf8(request.join().unwrap()).unwrap();
+        assert!(text.starts_with("POST /sharefolder HTTP/1.1"));
+        assert!(text.contains("permissions=7"));
+        assert!(text.contains("mail=user%40example.com"));
     }
     #[test]
     fn errors_never_echo_server_content_or_tokens() {

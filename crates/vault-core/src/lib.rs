@@ -243,6 +243,83 @@ impl Vault {
         self.entry(&id)
     }
 
+    /// Replaces a file's whole contents with a new version, as one history entry.
+    pub fn replace_file<R: Read>(&mut self, id: &str, mut reader: R) -> Result<Entry> {
+        let entry = self.entry(id)?;
+        if entry.kind != EntryKind::File || entry.trashed {
+            return Err(Error::InvalidInput(
+                "only existing files can be replaced".into(),
+            ));
+        }
+        self.materialize(id)?;
+        let manifest_id = self.store_reader(id, &mut reader)?;
+        let manifest: Manifest = self.store.metadata("manifest", &manifest_id)?;
+        self.commit(Operation::Write {
+            id: id.into(),
+            manifest: manifest_id,
+            size: manifest.size,
+        })?;
+        self.entry(id)
+    }
+
+    /// Opaque identifier of a file's current contents; it changes on every write.
+    pub fn content_version(&self, id: &str) -> Result<String> {
+        Ok(self.manifest(id)?.version_id.clone())
+    }
+
+    /// Stores small per-device application data encrypted under this vault's key.
+    pub fn store_local_blob(&self, name: &str, data: &[u8]) -> Result<()> {
+        let path = self.local_blob_path(name)?;
+        fs::create_dir_all(path.parent().ok_or(Error::NotFound)?)?;
+        let key = Zeroizing::new(derive_key(&self.key, b"local-side-data"));
+        let ciphertext = seal(&key, data, &self.local_blob_aad(name))?;
+        write_atomic(&path, &ciphertext)
+    }
+
+    /// Reads data written by `store_local_blob`; `None` when nothing was stored yet.
+    pub fn load_local_blob(&self, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        let path = self.local_blob_path(name)?;
+        recover_checkpoint(&path)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = read_limited(&path, 256 * 1024 * 1024)?;
+        let key = Zeroizing::new(derive_key(&self.key, b"local-side-data"));
+        Ok(Some(Zeroizing::new(open(
+            &key,
+            &bytes,
+            &self.local_blob_aad(name),
+        )?)))
+    }
+
+    pub fn remove_local_blob(&self, name: &str) -> Result<()> {
+        let path = self.local_blob_path(name)?;
+        for candidate in [path.clone(), path.with_extension("previous")] {
+            match fs::remove_file(&candidate) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    fn local_blob_path(&self, name: &str) -> Result<PathBuf> {
+        if name.is_empty()
+            || name.len() > 64
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(Error::InvalidInput("invalid local data name".into()));
+        }
+        Ok(self.root.join("side").join(format!("{name}.bin")))
+    }
+
+    fn local_blob_aad(&self, name: &str) -> Vec<u8> {
+        [self.vault_id().as_bytes(), b"/", name.as_bytes()].concat()
+    }
+
     pub fn read(&self, id: &str, offset: u64, buffer: &mut [u8]) -> Result<usize> {
         let manifest = self.manifest(id)?;
         self.read_manifest(&manifest, offset, buffer)

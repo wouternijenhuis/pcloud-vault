@@ -688,6 +688,7 @@ mod tests {
                 is_folder: false,
                 parent_folder_id: parent,
                 size: 48,
+                hash: None,
                 modified: 1,
             }),
         };

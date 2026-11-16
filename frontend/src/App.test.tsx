@@ -36,11 +36,15 @@ describe('pCloud Vault interface', () => {
   it('clearly labels browser mode and unencrypted cloud files', async () => {
     render(<App />)
     expect(await screen.findByText('DEMO MODE')).toBeInTheDocument()
-    expect(screen.getByText('Unencrypted')).toBeInTheDocument()
-    expect(await screen.findByText('Project brief.pdf')).toBeInTheDocument()
+    expect(within(screen.getByRole('button', { name: 'pCloud Files' })).getByText('Not encrypted')).toBeInTheDocument()
+    expect(await screen.findByText('Notes.md')).toBeInTheDocument()
     expect(screen.getByText('Sample data only — no cloud changes are made.')).toBeInTheDocument()
-    expect(screen.getByText('Cached files stay encrypted on this computer.')).toBeInTheDocument()
+    expect(screen.getByText('You are in the Vault. Everything here is encrypted.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Available offline' }).querySelector('.nav-count')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'pCloud Files' }))
+    expect(await screen.findByText('You are in pCloud Files. Nothing here is encrypted by this app.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(await screen.findByText('Cached files stay encrypted on this computer.')).toBeInTheDocument()
   })
 
   it('creates a folder in the labeled demo workspace', async () => {
@@ -61,30 +65,56 @@ describe('pCloud Vault interface', () => {
 
   it('clears visible vault names immediately when locked', async () => {
     render(<App />)
-    expect(await screen.findByText('Project brief.pdf')).toBeInTheDocument()
+    expect(await screen.findByText('Notes.md')).toBeInTheDocument()
     fireEvent.click(screen.getByTitle('Lock vault'))
     expect(await screen.findByText('Your vault is locked.')).toBeInTheDocument()
-    expect(screen.queryByText('Project brief.pdf')).not.toBeInTheDocument()
+    expect(screen.queryByText('Notes.md')).not.toBeInTheDocument()
   })
 
-  it('shows vault import, not vault-only toggles, for cloud files', async () => {
+  it('shows copy into Vault and sharing, not vault-only toggles, for cloud files', async () => {
     render(<App />)
     fireEvent.click(screen.getByText('pCloud Files'))
     fireEvent.click(await screen.findByText('Notes.md'))
     const selection = document.querySelector<HTMLElement>('.selection-bar')!
-    expect(within(selection).getByRole('button', { name: /Import to vault/ })).toBeInTheDocument()
+    expect(within(selection).getByRole('button', { name: /Copy into Vault/ })).toBeInTheDocument()
+    expect(within(selection).getByRole('button', { name: /Get link/ })).toBeInTheDocument()
     expect(within(selection).queryByRole('button', { name: /Favorite|Offline/ })).not.toBeInTheDocument()
   })
 
-  it('returns collection navigation to the private vault workspace', async () => {
+  it('offers Get link and Share folder for pCloud folders', async () => {
     render(<App />)
     fireEvent.click(screen.getByText('pCloud Files'))
-    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }))
+    fireEvent.click(await screen.findByText('Team handbook'))
+    const selection = document.querySelector<HTMLElement>('.selection-bar')!
+    expect(within(selection).getByRole('button', { name: /Get link/ })).toBeInTheDocument()
+    fireEvent.click(within(selection).getByRole('button', { name: /Share folder/ }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('It is not encrypted')
+  })
+
+  it('never offers sharing for Vault files and says why', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByText('Notes.md'))
+    const selection = document.querySelector<HTMLElement>('.selection-bar')!
+    expect(within(selection).queryByRole('button', { name: /Get link|Share/ })).not.toBeInTheDocument()
+    expect(within(selection).getByText(/Vault files can't be shared: sharing would let pCloud read them/)).toBeInTheDocument()
+    fireEvent.contextMenu(screen.getByText('Notes.md'))
+    expect(within(screen.getByRole('menu')).queryByRole('menuitem', { name: /link|Share/i })).not.toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'Shared' }))
+    expect(await screen.findByText(/To share a Vault file, export a copy and upload it to pCloud Files/)).toBeInTheDocument()
+  })
+
+  it('keeps vault collections inside the Vault workspace', async () => {
+    render(<App />)
+    fireEvent.click(screen.getByText('pCloud Files'))
+    expect(screen.queryByRole('button', { name: 'Favorites' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Vault' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Favorites' }))
     const favorite = await screen.findByText('Project brief.pdf')
     fireEvent.click(favorite)
     const selection = document.querySelector<HTMLElement>('.selection-bar')!
     expect(within(selection).getByRole('button', { name: /Favorite/ })).toBeInTheDocument()
-    expect(within(selection).queryByRole('button', { name: /Import to vault/ })).not.toBeInTheDocument()
+    expect(within(selection).queryByRole('button', { name: /Copy into Vault/ })).not.toBeInTheDocument()
   })
 
   it('supports navigating into a folder and back to root', async () => {
@@ -222,6 +252,15 @@ describe('pCloud Vault interface', () => {
     fireEvent.change(within(wizard).getByLabelText('Repeat password'), { target: { value: 'long enough secret' } })
     fireEvent.click(within(wizard).getByRole('button', { name: 'Create vault' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('create_vault', { password: 'long enough secret', remember: true }))
+    expect(await within(wizard).findByText('How should your files be protected?')).toBeInTheDocument()
+    expect(wizard).toHaveTextContent('pCloud still sees roughly how much you store')
+    fireEvent.click(within(wizard).getByRole('radio', { name: /Let me choose each time/ }))
+    expect(within(wizard).getByRole('radio', { name: /Let me choose each time/ })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(within(wizard).getByRole('radio', { name: /Everything encrypted/ }))
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('set_preferences', { protection: 'everything' }))
+    expect(await within(wizard).findByText('Back up or sync a folder now?')).toBeInTheDocument()
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Skip for now' }))
     expect(await within(wizard).findByText("You're all set")).toBeInTheDocument()
     fireEvent.click(within(wizard).getByRole('button', { name: 'Open my vault' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -241,7 +280,7 @@ describe('pCloud Vault interface', () => {
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
     fireEvent.click(screen.getByRole('button', { name: 'Forget device' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Private Vault' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Vault' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Create a vault password' }))
     expect((screen.getByLabelText('Vault password') as HTMLInputElement).minLength).toBe(12)
   })
@@ -281,5 +320,137 @@ describe('pCloud Vault interface', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     resolvePreview('data:image/png;base64,private-preview')
     await waitFor(() => expect(screen.queryByRole('img', { name: 'Photo.png' })).not.toBeInTheDocument())
+  })
+
+  it('shows every section of the official app in order and opens each one', async () => {
+    render(<App />)
+    await screen.findByText('Notes.md')
+    const labels = ['Upload', 'Back up', 'Sync', 'Photos', 'Vault', 'pCloud Files', 'Shared', 'File request', 'About', 'Account', 'Help', 'Settings']
+    const buttons = [...screen.getByRole('navigation', { name: 'Sections' }).querySelectorAll('button'), ...screen.getByRole('navigation', { name: 'Account and settings' }).querySelectorAll('button')]
+    expect(buttons.map(button => button.getAttribute('aria-label'))).toEqual(labels)
+    const content: Record<string, string | RegExp> = {
+      Upload: 'Upload your files', 'Back up': /one-way copy of a folder/, Sync: /in both directions/, Photos: /newest first/,
+      Vault: 'You are in the Vault. Everything here is encrypted.', 'pCloud Files': 'You are in pCloud Files. Nothing here is encrypted by this app.',
+      Shared: /Vault files can't be shared/, 'File request': /Let anyone upload files to you/, About: /not been independently audited/,
+      Account: 'Storage used', Help: 'What does encrypted mean here?', Settings: 'How your files are protected',
+    }
+    for (const label of labels) {
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(label)
+      expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-current', 'page')
+      expect(await screen.findByText(content[label])).toBeInTheDocument()
+    }
+  })
+
+  it('shows the upload drop zone with a destination choice', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    expect(screen.getByText('Drop files and folders here or click Browse')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Browse folder/ })).toBeInTheDocument()
+    expect(screen.getByText('Files are encrypted before they leave this computer.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: /pCloud — not encrypted/ }))
+    expect(screen.getByText('Files are uploaded as they are. pCloud can read them.')).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Upload queue' })).getByText('Quarterly report.pdf')).toBeInTheDocument()
+  })
+
+  it('summarizes downloads left and uploads right in the idle status bar', async () => {
+    useNativeBridge()
+    render(<App />)
+    expect(await screen.findByRole('button', { name: /Everything downloaded/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Everything uploaded/ })).toBeInTheDocument()
+  })
+
+  it('counts running transfers and waiting changes in the status bar and opens the drawer', async () => {
+    useNativeBridge()
+    nativeStatusForTest = { ...nativeStatus, pendingCount: 2 }
+    const transfer = (id: string, name: string, direction: 'upload' | 'download', state: 'queued' | 'active' | 'done') =>
+      ({ id, name, direction, location: 'vault', done: 50, total: 100, state, error: null, time: Date.now() })
+    const native = vi.mocked(invoke).getMockImplementation()!
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'get_transfers') return [transfer('t1', 'Report.pdf', 'upload', 'active'), transfer('t2', 'Photo.jpg', 'download', 'queued'), transfer('t3', 'Old.zip', 'download', 'done')] as never
+      return native(command, args)
+    })
+    render(<App />)
+    expect(await screen.findByRole('button', { name: /Downloading 1 file…/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Uploading 3 files…/ }))
+    const drawer = screen.getByRole('complementary', { name: 'Activity and transfers' })
+    expect(within(drawer).getByText('Report.pdf')).toBeInTheDocument()
+    expect(within(drawer).getAllByRole('img', { name: /Encrypted: Only you can read this/ }).length).toBe(3)
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Clear finished' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('clear_transfers', {}))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('complementary', { name: 'Activity and transfers' })).not.toBeInTheDocument()
+  })
+
+  it('asks before applying mass deletions and sends the answer to resolve_guard', async () => {
+    useNativeBridge()
+    const native = vi.mocked(invoke).getMockImplementation()!
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'list_jobs') return [{ id: 'job-1', kind: 'sync', localPath: '~/Documents', target: { location: 'vault', folderId: null, label: 'Vault' }, paused: false, mirrorDeletions: false, lastRun: null, state: 'needsReview', message: null, pendingDeletes: 12, fileCount: 40 }] as never
+      return native(command, args)
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync' }))
+    const card = await screen.findByRole('article', { name: 'Sync of Documents' })
+    expect(card).toHaveTextContent('12 files would be deleted.')
+    expect(within(card).getByText('Encrypted')).toBeInTheDocument()
+    fireEvent.click(within(card).getByRole('button', { name: 'Keep them' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('resolve_guard', { id: 'job-1', apply: false }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete them' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete them' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('resolve_guard', { id: 'job-1', apply: true }))
+  })
+
+  it('adds a backup in three steps and says plainly who can read the files', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Back up' }))
+    fireEvent.click(screen.getByRole('button', { name: /Back up Documents/ }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('radio', { name: /pCloud — not encrypted/ }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(dialog).toHaveTextContent('Files in ~/Documents will be stored unencrypted in pCloud; pCloud can read them.')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Vault — encrypted/ }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(dialog).toHaveTextContent('Files in ~/Documents will be encrypted before they leave this computer')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start backup' }))
+    expect(await screen.findByRole('article', { name: 'Backup of Documents' })).toHaveTextContent('Encrypted')
+  })
+
+  it('asks once to choose protection after upgrading from 0.2.0', async () => {
+    useNativeBridge()
+    const native = vi.mocked(invoke).getMockImplementation()!
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'get_preferences') return { protection: null, theme: 'system', startAtLogin: false } as never
+      return native(command, args)
+    })
+    render(<App />)
+    const prompt = await screen.findByRole('region', { name: 'Choose how your files are protected' })
+    fireEvent.click(within(prompt).getByRole('radio', { name: /Only the Vault/ }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('set_preferences', { protection: 'vaultOnly' }))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Choose how your files are protected' })).not.toBeInTheDocument())
+  })
+
+  it('offers to switch unencrypted folders when everything should be encrypted', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /Everything encrypted/ }))
+    const list = await screen.findByRole('region', { name: 'Folders that are not encrypted' })
+    fireEvent.click(within(list).getByRole('button', { name: /Switch to encrypted/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('stays there, unencrypted')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Switch to encrypted' }))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Folders that are not encrypted' })).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Back up' }))
+    expect(await screen.findByRole('article', { name: 'Backup of Pictures' })).toHaveTextContent('Encrypted')
+  })
+
+  it('saves the theme and follows the system appearance when set to System', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Dark' }))
+    await waitFor(() => expect(document.querySelector('.app-shell')).toHaveAttribute('data-theme', 'dark'))
+    fireEvent.click(screen.getByRole('radio', { name: 'Light' }))
+    await waitFor(() => expect(document.querySelector('.app-shell')).toHaveAttribute('data-theme', 'light'))
   })
 })

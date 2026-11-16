@@ -2,6 +2,20 @@
 
 All notable changes to pCloud Vault are listed here. The project follows [Semantic Versioning](https://semver.org/). A release is published automatically when a merge to `main` carries a new version in `src-tauri/tauri.conf.json`.
 
+## [0.3.0]
+
+pCloud Vault now offers the sections of a full pCloud client, with encryption wherever you want it.
+
+- **Choose your protection:** everything encrypted, choose each time, or only the Vault. Set it in the welcome guide or in Settings. Every destination, job, file and photo is labelled *Encrypted* or *Not encrypted*.
+- **Upload** page with drag and drop, Browse files and Browse folder, a destination picker and a transfer list.
+- **Back up** (one-way) and **Sync** (two-way) folders from this computer to the Vault or to pCloud. Changes on both sides are kept as conflict copies, large deletions pause for your review, and files a sync removes from this computer go to a recycle folder for 30 days. Indexes of Vault jobs are encrypted.
+- **Photos** timeline across the Vault and pCloud, with in-memory thumbnails.
+- **Shared:** public links and shared folders for regular pCloud files. Vault files are never shared.
+- **File requests**, optionally moving received files into the Vault automatically.
+- **Account** (storage use), **Help**, **About**, and a status bar with upload and download activity.
+- Settings for theme (System, Light or Dark) and starting at sign-in.
+- No new third-party libraries: folder scanning, recycling and thumbnails use what the app already had.
+
 ## [0.2.0]
 
 pCloud Vault now runs on Linux and macOS as well as Windows.

@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Check, Cloud, Globe, HardDrive, KeyRound, LockKeyhole, MousePointerClick, ShieldCheck, Upload } from 'lucide-react'
-import type { AppStatus } from '../types'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { Check, Cloud, FolderOpen, Globe, HardDrive, KeyRound, LockKeyhole, MousePointerClick, ShieldCheck, Upload } from 'lucide-react'
+import { DestinationPicker, defaultTarget } from './DestinationPicker'
+import { jobSummary, knownFolderList } from './FolderJobDialog'
+import { ProtectionChoice } from './ProtectionChoice'
+import type { AppStatus, ExtraArguments, JobKind, KnownFolders, Protection, Target } from '../types'
 
 type Props = {
   status: AppStatus
@@ -12,17 +15,28 @@ type Props = {
   exportRecovery: () => void
   workLocally: () => void
   finish: () => void
+  protection: Protection | null
+  chooseProtection: (value: Protection) => Promise<boolean>
+  knownFolders: KnownFolders | null
+  pickFolder: () => Promise<string | null>
+  addJob: (args: ExtraArguments['add_job']) => Promise<boolean>
 }
 
-const STEPS = ['Welcome', 'Connect pCloud', 'Your vault', 'All set'] as const
+const STEPS = ['Welcome', 'Connect pCloud', 'Your vault', 'Protection', 'Folders', 'All set'] as const
+const LAST = STEPS.length - 1
 
 /** First-start guide: explains the app, connects pCloud and creates or unlocks the vault. */
-export function WelcomeWizard({ status, busy, error, connect, createVault, unlockVault, exportRecovery, workLocally, finish }: Props) {
+export function WelcomeWizard({ status, busy, error, connect, createVault, unlockVault, exportRecovery, workLocally, finish, protection, chooseProtection, knownFolders, pickFolder, addJob }: Props) {
   const [step, setStep] = useState(0)
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [remember, setRemember] = useState(true)
   const [mismatch, setMismatch] = useState(false)
+  const [choice, setChoice] = useState<Protection>(protection ?? 'everything')
+  const [folder, setFolder] = useState<string | null>(null)
+  const [kind, setKind] = useState<JobKind>('backup')
+  const [target, setTarget] = useState<Target>(() => defaultTarget(protection ?? 'everything'))
+  const changeTarget = useCallback((value: Target) => setTarget(value), [])
   const body = useRef<HTMLDivElement>(null)
   const unlocking = status.vaultExists
 
@@ -35,6 +49,12 @@ export function WelcomeWizard({ status, busy, error, connect, createVault, unloc
     if (!unlocking && password !== confirmation) { setMismatch(true); return }
     const done = unlocking ? await unlockVault(password, remember) : await createVault(password, remember)
     if (done) { setPassword(''); setConfirmation(''); setStep(3) }
+  }
+  const saveProtection = async () => { if (await chooseProtection(choice)) setStep(4) }
+  const chooseOther = async () => { const path = await pickFolder().catch(() => null); if (path) setFolder(path) }
+  const submitFolder = async () => {
+    if (!folder) return
+    if (await addJob({ kind, localPath: folder, location: target.location, folderId: null, mirrorDeletions: false })) setStep(LAST)
   }
 
   return <div className="wizard-backdrop">
@@ -52,7 +72,7 @@ export function WelcomeWizard({ status, busy, error, connect, createVault, unloc
           <h2 id="wizard-title">Welcome to pCloud Vault</h2>
           <p className="wizard-lead">A private, open-source desktop client for your pCloud storage.</p>
           <ul className="wizard-points">
-            <li><LockKeyhole size={17} /><div><strong>Encrypted before it leaves your computer</strong><span>Files in your Private Vault are encrypted on this computer with your own password. pCloud only stores unreadable data.</span></div></li>
+            <li><LockKeyhole size={17} /><div><strong>Encrypted before it leaves your computer</strong><span>Files in your Vault are encrypted on this computer with your own password. pCloud only stores unreadable data.</span></div></li>
             <li><Cloud size={17} /><div><strong>Your regular pCloud files, side by side</strong><span>Browse your existing files under pCloud Files. They are clearly marked as not encrypted.</span></div></li>
             <li><HardDrive size={17} /><div><strong>On all your computers</strong><span>Sign in on another computer, enter your vault password once, and your vault follows you.</span></div></li>
           </ul>
@@ -78,7 +98,7 @@ export function WelcomeWizard({ status, busy, error, connect, createVault, unloc
           <h2 id="wizard-title">{unlocking ? 'Unlock your vault' : 'Create your vault password'}</h2>
           <p className="wizard-lead">{unlocking
             ? 'We found your existing vault in pCloud. Enter its password once to use it on this computer.'
-            : 'This password encrypts your Private Vault. Use at least 12 characters, and keep it safe: nobody, including pCloud and the makers of this app, can recover it for you.'}</p>
+            : 'This password encrypts your Vault. Use at least 12 characters, and keep it safe: nobody, including pCloud and the makers of this app, can recover it for you.'}</p>
           <label className="field-label">Vault password<input required type="password" minLength={12} value={password} onChange={e => { setPassword(e.target.value); setMismatch(false) }} autoComplete={unlocking ? 'current-password' : 'new-password'} placeholder="At least 12 characters" /></label>
           {!unlocking && <label className="field-label">Repeat password<input required type="password" minLength={12} value={confirmation} onChange={e => { setConfirmation(e.target.value); setMismatch(false) }} autoComplete="new-password" aria-invalid={mismatch} /></label>}
           {mismatch && <p className="dialog-error" role="alert">The passwords don't match.</p>}
@@ -87,10 +107,35 @@ export function WelcomeWizard({ status, busy, error, connect, createVault, unloc
         </form>}
 
         {step === 3 && <>
+          <h2 id="wizard-title">How should your files be protected?</h2>
+          <p className="wizard-lead">This decides where new uploads, backups and syncs go. You can change it any time in Settings.</p>
+          <ProtectionChoice value={choice} onChange={setChoice} disabled={busy} />
+          <div className="wizard-actions"><span /><button className="button button-primary" onClick={() => void saveProtection()} disabled={busy}>{busy ? 'Please wait…' : 'Continue'}</button></div>
+        </>}
+
+        {step === 4 && <>
+          <h2 id="wizard-title">Back up or sync a folder now?</h2>
+          <p className="wizard-lead">Optional. You can add folders later on the Back up and Sync pages.</p>
+          <div className="chip-row" aria-label="Folders on this computer">
+            {knownFolderList(knownFolders).map(item => <button key={item.label} type="button" className={`chip ${folder === item.path ? 'selected' : ''}`} aria-pressed={folder === item.path} onClick={() => setFolder(item.path)}><FolderOpen size={14} /> {item.label}</button>)}
+            <button type="button" className="chip" onClick={() => void chooseOther()}><FolderOpen size={14} /> Choose another folder…</button>
+          </div>
+          {folder && <>
+            <div className="segmented" role="radiogroup" aria-label="Back up or sync">
+              <button type="button" role="radio" aria-checked={kind === 'backup'} className={kind === 'backup' ? 'active' : ''} onClick={() => setKind('backup')}>Back up: one-way copy</button>
+              <button type="button" role="radio" aria-checked={kind === 'sync'} className={kind === 'sync' ? 'active' : ''} onClick={() => setKind('sync')}>Sync: same files on both sides</button>
+            </div>
+            <DestinationPicker protection={choice} value={target} onChange={changeTarget} />
+            <p className="wizard-summary">{jobSummary(kind, folder, target)}</p>
+          </>}
+          <div className="wizard-actions"><button className="text-action" onClick={() => setStep(LAST)} disabled={busy}>Skip for now</button><button className="button button-primary" onClick={() => void submitFolder()} disabled={busy || !folder}>{kind === 'sync' ? 'Start sync' : 'Start backup'}</button></div>
+        </>}
+
+        {step === LAST && <>
           <div className="wizard-mark done"><Check size={26} /></div>
           <h2 id="wizard-title">You're all set</h2>
           <ul className="wizard-points compact">
-            <li><Upload size={17} /><div><strong>Add files</strong><span>Drag files or folders into Private Vault. The originals on your computer stay where they are.</span></div></li>
+            <li><Upload size={17} /><div><strong>Add files</strong><span>Use Upload, Back up or Sync, or drag files into the Vault. The originals on your computer stay where they are.</span></div></li>
             <li><MousePointerClick size={17} /><div><strong>Right-click for actions</strong><span>Preview, export, rename, keep offline or move to trash.</span></div></li>
             <li><KeyRound size={17} /><div><strong>Save a recovery key</strong><span>If you ever forget your password, a recovery key is the only way back into your vault. Store it somewhere safe, offline.</span></div></li>
           </ul>

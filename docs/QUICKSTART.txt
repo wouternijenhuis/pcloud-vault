@@ -35,8 +35,13 @@ GET STARTED
      - Create your vault password (12+ characters). Nobody can recover it
        for you, so keep it safe.
      - Save a recovery key and store it offline.
-  2. Drag files into Private Vault. They are encrypted on your computer
-     before upload. Your originals stay where they are.
+     - Choose how your files are protected: everything encrypted, choose
+       each time, or only the Vault. You can change this in Settings.
+  2. Drag files onto Upload or into the Vault. Vault files are encrypted on
+     your computer before upload. Your originals stay where they are.
+  3. Optional: under "Back up" or "Sync", add a folder from this computer.
+     Backup copies one way; sync keeps both sides the same. Every job shows
+     whether it is Encrypted or Not encrypted.
 
 ON ANOTHER COMPUTER
   Install, sign in to the same pCloud account and enter your vault password
@@ -45,7 +50,12 @@ ON ANOTHER COMPUTER
 GOOD TO KNOW
   - pCloud's own apps do not show the vault folder (".pcloud-vault"). Your
     vault files appear only in this app, under their real names.
-  - "pCloud Files" shows your regular, unencrypted pCloud files.
+  - "pCloud Files" shows your regular, unencrypted pCloud files. Links,
+    shared folders and file requests only work with these files, never with
+    the Vault.
+  - If a sync or backup would delete many files at once, it pauses and asks
+    you first. Files a sync removes from this computer stay in its recycle
+    folder for 30 days (open it from the job card).
   - Closing the window keeps the app running in the tray (menu bar on
     macOS; click the Dock icon to bring the window back). Use the tray
     menu to lock or quit.

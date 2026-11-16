@@ -15,7 +15,9 @@
 
 </div>
 
-Files you put in **Private Vault** are encrypted on your computer with your own password before anything is uploaded. pCloud only stores unreadable data with random names. Your regular pCloud files stay available next to it under **pCloud Files**, clearly marked as not encrypted.
+Files you put in the **Vault** are encrypted on your computer with your own password before anything is uploaded. pCloud only stores unreadable data with random names. Your regular pCloud files stay available next to it under **pCloud Files**, clearly marked as not encrypted.
+
+You decide how much is encrypted: **everything** (every upload, backup, sync and file request goes to the Vault), **choose each time**, or **only the Vault** (the rest works like an ordinary pCloud client). Every destination, job, file and photo carries an *Encrypted* or *Not encrypted* label, so it is always clear what pCloud can read.
 
 ## Download
 
@@ -41,6 +43,12 @@ gh attestation verify pCloud-Vault-0.2.0-linux-x64.AppImage --repo wouternijenhu
 ## Features
 
 - **End-to-end encrypted vault.** Files, file names and folders are encrypted on your computer before upload.
+- **Upload** files and folders by drag and drop or Browse, with a transfer list and a status bar that shows what is uploading and downloading.
+- **Back up** folders from this computer (one-way) and **Sync** folders (two-way), to the Vault (encrypted) or to pCloud (not encrypted). Mass deletions pause for your review, and files a sync removes from this computer go to a recycle folder for 30 days.
+- **Photos** from the Vault and pCloud in one timeline. Vault thumbnails are made in memory only.
+- **Shared:** public links and shared folders for your regular pCloud files. Vault files are never shared, because pCloud would have to read them.
+- **File requests:** let others upload to a pCloud folder, and optionally move what they send into the Vault automatically.
+- **Account, Help and About** pages, plus Settings for protection, theme and start at sign-in.
 - **Your existing pCloud files.** Browse, rename, move, download and trash them in the same app.
 - **Sign in on pCloud's own website**, including two-step verification and Google, Apple or Facebook sign-in. The app never reads or stores your pCloud password.
 - **Several computers.** Sign in on another computer, enter your vault password once, and your vault follows you. Simultaneous edits are kept as conflict copies, never silently overwritten.

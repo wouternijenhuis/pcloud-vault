@@ -30,7 +30,9 @@ Rules:
 
 ## Project notes
 
-- Rust workspace: `crates/vault-core` (crypto, store, sync), `crates/pcloud-api` (transport, OAuth, device secret protection: DPAPI / Keychain / Secret Service), `crates/vault-cli` (recovery), `src-tauri` (desktop shell). React/TypeScript UI is in `frontend`.
+- Rust workspace: `crates/vault-core` (crypto, store, sync), `crates/pcloud-api` (transport, OAuth, device secret protection: DPAPI / Keychain / Secret Service), `crates/vault-cli` (recovery), `src-tauri` (desktop shell: `app.rs` core commands, `replication.rs` vault sync, `folders.rs` backup/sync engine, `jobs.rs` job commands and scheduler, `features.rs` uploads, photos, links, shares and file requests, `transfers.rs` transfer list). React/TypeScript UI is in `frontend` (`pages/`, `components/`; `types.ts` holds the IPC contract).
+- Encryption choice: anything with `location: "cloud"` is plain pCloud data. Links, shares and file requests must refuse Vault ids. Keep the *Encrypted* / *Not encrypted* labels accurate and the protection boundary in `docs/VAULT_FORMAT.md` and `SECURITY.md` up to date.
+- No new dependencies without a strong reason: the maintainer prefers std and the crates already in use.
 - Cloud credentials and file bytes stay in Rust. The UI talks only through the restricted Tauri commands in `src-tauri/capabilities/main.json`.
 - Validation:
   - `cargo test --workspace`

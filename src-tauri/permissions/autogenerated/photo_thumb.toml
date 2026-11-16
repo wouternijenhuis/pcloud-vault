@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-photo-thumb"
+description = "Enables the photo_thumb command without any pre-configured scope."
+commands.allow = ["photo_thumb"]
+
+[[permission]]
+identifier = "deny-photo-thumb"
+description = "Denies the photo_thumb command without any pre-configured scope."
+commands.deny = ["photo_thumb"]

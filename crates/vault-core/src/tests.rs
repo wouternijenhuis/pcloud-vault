@@ -831,3 +831,38 @@ fn chunks_of_in_use_entries_and_folders_are_not_evicted() {
     assert_eq!(contents(&vault, &file.id), vec![7_u8; CHUNK_SIZE * 2]);
     assert!(vault.evict_cache_protecting(&BTreeSet::new()).unwrap() > 0);
 }
+
+#[test]
+fn replace_file_creates_a_new_version_and_side_data_roundtrips() {
+    let (_directory, mut vault) = fixture();
+    let entry = vault
+        .import_file(None, "notes.txt", Cursor::new(b"first".to_vec()))
+        .unwrap();
+    let before = vault.content_version(&entry.id).unwrap();
+    let replaced = vault
+        .replace_file(&entry.id, Cursor::new(b"second version".to_vec()))
+        .unwrap();
+    assert_eq!(replaced.size, 14);
+    assert_eq!(contents(&vault, &entry.id), b"second version");
+    assert_ne!(vault.content_version(&entry.id).unwrap(), before);
+    let (_copy, replica) = replica(&vault);
+    assert_eq!(contents(&replica, &entry.id), b"second version");
+
+    assert!(vault.load_local_blob("sync-index").unwrap().is_none());
+    vault
+        .store_local_blob("sync-index", b"private paths")
+        .unwrap();
+    let raw = std::fs::read(vault.root().join("side").join("sync-index.bin")).unwrap();
+    assert!(!raw.windows(7).any(|window| window == b"private"));
+    assert_eq!(
+        vault
+            .load_local_blob("sync-index")
+            .unwrap()
+            .unwrap()
+            .as_slice(),
+        b"private paths"
+    );
+    assert!(vault.store_local_blob("../escape", b"x").is_err());
+    vault.remove_local_blob("sync-index").unwrap();
+    assert!(vault.load_local_blob("sync-index").unwrap().is_none());
+}

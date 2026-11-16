@@ -11,6 +11,7 @@
     "allow-move-entry", "allow-trash-entry", "allow-restore-entry", "allow-toggle-favorite",
     "allow-toggle-pin", "allow-import-files", "allow-import-paths", "allow-import-cloud-file",
     "allow-download-entry", "allow-open-entry", "allow-preview-entry", "allow-sync-now",
-    "allow-change-password", "allow-export-recovery", "allow-get-activity"
+    "allow-change-password", "allow-export-recovery", "allow-get-activity",
+    "allow-get-preferences", "allow-set-preferences", "allow-account-info", "allow-known-folders", "allow-pick-folder", "allow-open-url", "allow-upload-paths", "allow-upload-files", "allow-upload-folder", "allow-get-transfers", "allow-clear-transfers", "allow-list-photos", "allow-photo-thumb", "allow-list-links", "allow-create-link", "allow-delete-link", "allow-list-shares", "allow-share-folder", "allow-accept-share", "allow-decline-share", "allow-remove-share", "allow-list-file-requests", "allow-create-file-request", "allow-delete-file-request", "allow-list-jobs", "allow-add-job", "allow-update-job", "allow-remove-job", "allow-run-job", "allow-resolve-guard", "allow-open-recycle"
   ]
 }
