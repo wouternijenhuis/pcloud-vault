@@ -52,6 +52,18 @@ pub struct JobView {
     file_count: usize,
 }
 
+/// Windows `canonicalize` returns verbatim `\\?\C:\...` paths; show and store the usual form.
+pub(crate) fn plain_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
+
 fn index_dir(s: &Inner) -> PathBuf {
     s.directory.join("jobs")
 }
@@ -128,7 +140,9 @@ fn view(s: &Inner, job: &FolderJob) -> JobView {
     JobView {
         id: job.id.clone(),
         kind: job.kind,
-        local_path: job.local_path.to_string_lossy().into_owned(),
+        local_path: plain_path(job.local_path.clone())
+            .to_string_lossy()
+            .into_owned(),
         target: TargetView {
             location: match job.location {
                 TargetLocation::Vault => "vault",
@@ -313,7 +327,7 @@ pub async fn add_job(
         destination_allowed(&s, location == TargetLocation::Vault)?;
         let local = PathBuf::from(&local_path);
         folders::validate_local_path(&local, &s.directory)?;
-        let local = std::fs::canonicalize(&local).map_err(|e| e.to_string())?;
+        let local = plain_path(std::fs::canonicalize(&local).map_err(|e| e.to_string())?);
         if let Some(old) = &replaces {
             if locked(&s.jobs.running)?.contains(old) {
                 return Err("Wait until the current backup or sync finishes.".into());
@@ -968,6 +982,22 @@ mod tests {
             None
         )
         .is_ok());
+    }
+
+    #[test]
+    fn verbatim_windows_paths_are_shown_plainly() {
+        assert_eq!(
+            plain_path(PathBuf::from(r"\\?\D:\Data\Docs")),
+            PathBuf::from(r"D:\Data\Docs")
+        );
+        assert_eq!(
+            plain_path(PathBuf::from(r"\\?\UNC\server\share\Docs")),
+            PathBuf::from(r"\\server\share\Docs")
+        );
+        assert_eq!(
+            plain_path(PathBuf::from("/home/x")),
+            PathBuf::from("/home/x")
+        );
     }
 
     #[test]

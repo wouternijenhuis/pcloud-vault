@@ -69,6 +69,7 @@ export default function App() {
   const busyRef = useRef(false)
   const toastTimer = useRef(0)
   const searchInput = useRef<HTMLInputElement>(null)
+  const [focusSearch, setFocusSearch] = useState(false)
 
   const applyStatus = useCallback((value: AppStatus) => {
     if (statusRef.current?.unlocked && !value.unlocked) {
@@ -155,10 +156,18 @@ export default function App() {
   const dark = theme === 'dark' || (theme === 'system' && systemDark)
   useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light' }, [dark])
   useEffect(() => {
-    const shortcut = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); searchInput.current?.focus() } }
+    // Search only exists on the file pages; from any other page Ctrl+K opens the last file page and focuses its search.
+    const shortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return
+      event.preventDefault()
+      setSection(current => current === 'vault' || current === 'cloud' ? current : lastFiles)
+      setFocusSearch(true)
+    }
     window.addEventListener('keydown', shortcut)
     return () => window.removeEventListener('keydown', shortcut)
-  }, [])
+  }, [lastFiles])
+  const fileSection = section === 'vault' || section === 'cloud'
+  useEffect(() => { if (focusSearch && fileSection) { searchInput.current?.focus(); setFocusSearch(false) } }, [focusSearch, fileSection])
   useEffect(() => {
     // The WebView's own menu (Back, Refresh, Print…) does not belong in a desktop app; keep it for text fields.
     const suppress = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest('input, textarea, [contenteditable="true"]')) event.preventDefault() }
@@ -173,8 +182,6 @@ export default function App() {
 
   const protection = preferences?.protection ?? null
   const navigate = (next: Section) => { setSection(next); setQuery(''); if (next === 'vault' || next === 'cloud') setLastFiles(next) }
-  // Searching from a page without a file list shows the matching files.
-  const search = (value: string) => { if (value && section !== 'vault' && section !== 'cloud') setSection(lastFiles); setQuery(value) }
   const openConnect = () => { setError(''); setModal('connect') }
   const openVaultDialog = (kind: 'create' | 'unlock') => setModal(kind)
   const openUnlock = () => setModal(status?.vaultExists ? 'unlock' : 'create')
@@ -214,7 +221,7 @@ export default function App() {
 
   const page = (() => {
     switch (section) {
-      case 'upload': return <UploadPage status={status} protection={protection} transfers={transfers} desktop={desktop} busy={busy} perform={perform} openSettings={() => navigate('settings')} openConnect={openConnect} openUnlock={openUnlock} />
+      case 'upload': return <UploadPage status={status} protection={protection} transfers={transfers} desktop={desktop} busy={busy} dataVersion={dataVersion} perform={perform} openSettings={() => navigate('settings')} openConnect={openConnect} openUnlock={openUnlock} />
       case 'backup': return <BackupPage jobs={jobs} knownFolders={knownFolders} busy={busy} perform={perform} onAdd={path => setJobDialog({ kind: 'backup', path })} />
       case 'sync': return <SyncPage jobs={jobs} knownFolders={knownFolders} busy={busy} perform={perform} onAdd={path => setJobDialog({ kind: 'sync', path })} />
       case 'photos': return <PhotosPage status={status} dataVersion={dataVersion} openPreview={item => void openPreview(item)} onBackUpPictures={() => setJobDialog({ kind: 'backup', path: knownFolders?.pictures ?? undefined })} openUnlock={openUnlock} />
@@ -238,7 +245,7 @@ export default function App() {
       <header className="topbar">
         <h1>{SECTION_TITLES[section]}</h1>
         <div className="top-actions">
-          <label className="search-box"><Search size={17} aria-hidden="true" /><input ref={searchInput} aria-label="Search files" placeholder={lastFiles === 'cloud' ? 'Search pCloud Files' : 'Search the Vault'} value={query} onChange={event => search(event.target.value)} /><kbd>Ctrl K</kbd></label>
+          {fileSection && <label className="search-box"><Search size={17} aria-hidden="true" /><input ref={searchInput} aria-label="Search files" placeholder={section === 'cloud' ? 'Search pCloud Files' : 'Search the Vault'} value={query} onChange={event => setQuery(event.target.value)} /><kbd>Ctrl K</kbd></label>}
           <button className="icon-button bordered" title="Sync now" aria-label="Sync now" onClick={() => void perform(() => runAction('sync_now', {}), 'Everything is up to date')}><RefreshCw size={17} /></button>
           {unlocked && <button className="icon-button bordered" title="Lock vault" aria-label="Lock vault" onClick={lockVault}><LockKeyhole size={17} /></button>}
         </div>

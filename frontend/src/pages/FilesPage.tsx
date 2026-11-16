@@ -80,6 +80,8 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
   const selectedEntry = entries.find(item => item.id === selected[0]) ?? null
   // The selection drives the selection bar; `current` only pins the item an open dialog acts on.
   const activeEntry = current ?? selectedEntry
+  // Items an open move/trash dialog acts on: the pinned item, or every selected item.
+  const targets = current ? [current] : entries.filter(item => selected.includes(item.id))
   const selectEntry = (entry: Entry, event: React.MouseEvent) => {
     setCurrent(null)
     if (vault && (event.ctrlKey || event.metaKey)) setSelected(value => value.includes(entry.id) ? value.filter(id => id !== entry.id) : [...value, entry.id])
@@ -94,6 +96,14 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
     const result: { link?: PublicLink } = {}
     if (await perform(async () => { result.link = await runExtra('create_link', { id: entry.id }) }, 'Link created') && result.link) { setLink(result.link); setCurrent(entry); setModal('link') }
   }
+  const renameAction = (entry: Entry): MenuItem => ({ label: 'Rename', run: () => { setCurrent(entry); setFormName(entry.name); setModal('rename') } })
+  const moveAction = (entry: Entry, count = 1): MenuItem => ({ label: 'Move', run: () => { setCurrent(count === 1 ? entry : null); setFormName(''); setModal('move') } })
+  const trashAction = (entry: Entry, count: number, label: string): MenuItem => ({ label, icon: <Trash2 size={15} />, danger: true, run: () => { setCurrent(count === 1 ? entry : null); setModal('delete') } })
+  /** Runs a per-item command on the selection (or one item) and reports once. */
+  const forEach = (entry: Entry, count: number, command: (item: Entry) => Promise<unknown>, success: string) => void act(async () => {
+    const items = count === 1 ? [entry] : entries.filter(item => selected.includes(item.id))
+    for (const item of items) await command(item)
+  }, success)
   /** One action list for the selection bar and the right-click menu, so both always match. */
   const entryActions = (entry: Entry | null, count: number): MenuItem[] => {
     if (!entry) return []
@@ -103,15 +113,18 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
       ...(count === 1 ? [{ label: 'Get link', icon: <Link2 size={15} />, run: () => void getLink(entry) }] : []),
       ...(count === 1 && entry.kind === 'folder' ? [{ label: 'Share folder', icon: <Share2 size={15} />, run: () => { setCurrent(entry); setShareEmail(''); setSharePermission('view'); setModal('share') } }] : []),
       ...(count === 1 && entry.kind === 'file' ? [{ label: 'Copy into Vault', icon: <LockKeyhole size={15} />, run: () => void act(() => runAction('import_cloud_file', { id: entry.id, parentId: null }), 'Copied into your Vault, encrypted. The original stays in pCloud.') }] : []),
+      ...(count === 1 ? [renameAction(entry)] : []),
+      moveAction(entry, count),
+      trashAction(entry, count, 'Move to pCloud trash'),
     ]
-    if (view === 'trash') return [{ label: 'Restore', run: () => void act(() => runAction('restore_entry', { location, id: entry.id }), 'Item restored') }]
+    if (view === 'trash') return [{ label: 'Restore', run: () => forEach(entry, count, item => runAction('restore_entry', { location, id: item.id }), count === 1 ? 'Item restored' : `${count} items restored`) }]
     return [
       ...exportCopy,
-      { label: 'Rename', run: () => { setCurrent(entry); setFormName(entry.name); setModal('rename') } },
-      { label: 'Move', run: () => { setCurrent(entry); setFormName(''); setModal('move') } },
-      { label: 'Favorite', icon: <Star size={15} />, run: () => void act(() => runAction('toggle_favorite', { id: entry.id }), 'Favorite updated') },
-      { label: 'Offline', icon: <HardDrive size={15} />, run: () => void act(() => runAction('toggle_pin', { id: entry.id }), 'Offline access updated') },
-      { label: 'Move to trash', icon: <Trash2 size={15} />, danger: true, run: () => { setCurrent(entry); setModal('delete') } },
+      ...(count === 1 ? [renameAction(entry)] : []),
+      moveAction(entry, count),
+      { label: 'Favorite', icon: <Star size={15} />, run: () => forEach(entry, count, item => runAction('toggle_favorite', { id: item.id }), 'Favorite updated') },
+      { label: 'Offline', icon: <HardDrive size={15} />, run: () => forEach(entry, count, item => runAction('toggle_pin', { id: item.id }), 'Offline access updated') },
+      trashAction(entry, count, 'Move to trash'),
     ]
   }
   const menuItems = (entry: Entry): MenuItem[] => {
@@ -141,8 +154,9 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
     const target = activeEntry
     if (modal === 'new') await perform(() => runAction('new_folder', { location, parentId, name: formName.trim() }), 'Folder created')
     if (modal === 'rename' && target) await act(() => runAction('rename_entry', { location, id: target.id, name: formName.trim() }), 'Name updated')
-    if (modal === 'move' && target) await act(() => runAction('move_entry', { location, id: target.id, parentId: formName || null }), 'Item moved')
-    if (modal === 'delete' && target) await act(() => runAction('trash_entry', { location, id: target.id }), 'Moved to trash')
+    const items = targets
+    if (modal === 'move' && items.length) await act(async () => { for (const item of items) await runAction('move_entry', { location, id: item.id, parentId: formName || null }) }, items.length === 1 ? 'Item moved' : `${items.length} items moved`)
+    if (modal === 'delete' && items.length) await act(async () => { for (const item of items) await runAction('trash_entry', { location, id: item.id }) }, vault ? 'Moved to trash' : 'Moved to pCloud trash')
     if (modal === 'share' && target) await perform(() => runExtra('share_folder', { id: target.id, email: shareEmail.trim(), permissions: sharePermission }), 'Invitation sent')
     setFormName(''); setModal(null); setCurrent(null)
   }
@@ -169,11 +183,14 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
       </div>
       <div className="view-switch" aria-label="Display mode"><button className={!grid ? 'active' : ''} aria-label="List view" aria-pressed={!grid} onClick={() => setGrid(false)}><LayoutList size={16} /></button><button className={grid ? 'active' : ''} aria-label="Grid view" aria-pressed={grid} onClick={() => setGrid(true)}><Grid2X2 size={16} /></button></div>
     </div>
-    {selected.length > 0 && <div className="selection-bar"><span>{selected.length} selected</span>
-      {entryActions(selectedEntry, selected.length).map(item => <button key={item.label} onClick={item.run} className={item.danger ? 'remove-action' : undefined}>{item.icon}{item.icon ? ' ' : ''}{item.label}</button>)}
-      {vault && view !== 'trash' && <small className="selection-note" title={VAULT_SHARE_NOTE}><ShieldCheck size={13} aria-hidden="true" /> {VAULT_SHARE_NOTE}</small>}
-      <button className="icon-button" onClick={() => setSelected([])} aria-label="Clear selection"><X size={16} /></button>
-    </div>}
+    {/* The slot always keeps its fixed height, so selecting never shifts the rows under the pointer (a double-click must open the row clicked). */}
+    <div className="selection-slot" data-testid="selection-slot">
+      {selected.length > 0 ? <div className="selection-bar"><span>{selected.length} selected</span>
+        {entryActions(selectedEntry, selected.length).map(item => <button key={item.label} onClick={item.run} className={item.danger ? 'remove-action' : undefined}>{item.icon}{item.icon ? ' ' : ''}{item.label}</button>)}
+        {vault && view !== 'trash' && <small className="selection-note" title={VAULT_SHARE_NOTE}><ShieldCheck size={13} aria-hidden="true" /> {VAULT_SHARE_NOTE}</small>}
+        <button className="icon-button" onClick={() => setSelected([])} aria-label="Clear selection"><X size={16} /></button>
+      </div> : entries.length > 0 && <p className="selection-hint">Click to select. Double-click to open.</p>}
+    </div>
     {entries.length === 0 ? <EmptyState view={view} query={query} allowUpload={vault} create={() => { setFormName(''); setModal('new') }} upload={browseFiles} /> : <div className={grid ? 'files-grid' : 'files-table-wrap'}>
       {!grid && <div className="table-header"><span>Name</span><span>Last modified</span><span>Size</span><span aria-label="Actions" /></div>}
       {entries.map(entry => <FileRow key={entry.id} entry={entry} location={location} grid={grid} selected={selected.includes(entry.id)} onSelect={event => selectEntry(entry, event)} onOpen={() => openEntry(entry)} onMenu={(x, y) => openMenu(entry, x, y)} trash={view === 'trash'} />)}
@@ -184,8 +201,8 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
     {menu && <ContextMenu x={menu.x} y={menu.y} label={`Actions for ${menu.entry.name}`} items={menuItems(menu.entry)} onClose={closeMenu} />}
     {modal === 'new' && <Dialog title="Create a folder" description={vault ? 'The folder name is encrypted too.' : 'This folder is created in pCloud, not encrypted.'} onClose={closeModal} onSubmit={onSubmit} submitLabel="Create folder" busy={busy}><label className="field-label">Folder name<input required maxLength={120} value={formName} onChange={event => setFormName(event.target.value)} placeholder="e.g. Home documents" /></label></Dialog>}
     {modal === 'rename' && activeEntry && <Dialog title="Rename item" description="The item will keep its current location." onClose={closeModal} onSubmit={onSubmit} submitLabel="Save name" busy={busy}><label className="field-label">New name<input required maxLength={180} value={formName} onChange={event => setFormName(event.target.value)} /></label></Dialog>}
-    {modal === 'move' && activeEntry && <Dialog title="Move item" description={`Choose a destination for “${activeEntry.name}”.`} onClose={closeModal} onSubmit={onSubmit} submitLabel="Move here" busy={busy}><label className="field-label">Destination<select value={formName} onChange={event => setFormName(event.target.value)}><option value="">Root folder</option>{allFolders.filter(item => item.id !== activeEntry.id).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></Dialog>}
-    {modal === 'delete' && activeEntry && <Dialog title="Move to trash?" description={`“${activeEntry.name}” can be restored from the trash later.`} onClose={closeModal} onSubmit={onSubmit} submitLabel="Move to trash" busy={busy} danger><p className="confirm-item"><File size={18} />{activeEntry.name}</p></Dialog>}
+    {modal === 'move' && targets.length > 0 && <Dialog title={targets.length === 1 ? 'Move item' : `Move ${targets.length} items`} description={targets.length === 1 ? `Choose a destination for “${targets[0].name}”.` : `Choose a destination for ${targets.length} items.`} onClose={closeModal} onSubmit={onSubmit} submitLabel="Move here" busy={busy}><label className="field-label">Destination<select value={formName} onChange={event => setFormName(event.target.value)}><option value="">Root folder</option>{allFolders.filter(item => !targets.some(target => target.id === item.id)).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></Dialog>}
+    {modal === 'delete' && targets.length > 0 && <Dialog title={vault ? 'Move to trash?' : 'Move to pCloud trash?'} description={vault ? (targets.length === 1 ? `“${targets[0].name}” can be restored from the trash later.` : `These ${targets.length} items can be restored from the trash later.`) : "Moves it to pCloud's trash. Restore it from pCloud's trash on the website."} onClose={closeModal} onSubmit={onSubmit} submitLabel={vault ? 'Move to trash' : 'Move to pCloud trash'} busy={busy} danger>{targets.map(item => <p key={item.id} className="confirm-item"><File size={18} />{item.name}</p>)}</Dialog>}
     {modal === 'share' && activeEntry && <Dialog title={`Share “${activeEntry.name}”`} description="The people you invite can open this folder. It is not encrypted, so pCloud can read it too." onClose={closeModal} onSubmit={onSubmit} submitLabel="Send invitation" busy={busy}>
       <label className="field-label">Email address<input required type="email" value={shareEmail} onChange={event => setShareEmail(event.target.value)} placeholder="name@example.com" /></label>
       <label className="field-label">They can<select value={sharePermission} onChange={event => setSharePermission(event.target.value as 'view' | 'edit')}><option value="view">View and download</option><option value="edit">View, add and change files</option></select></label>

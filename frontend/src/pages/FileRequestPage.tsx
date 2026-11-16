@@ -10,7 +10,7 @@ import type { AppStatus, FileRequest, Protection, Target } from '../types'
 import type { Perform } from '../ui'
 
 type Props = { status: AppStatus | null; protection: Protection | null; busy: boolean; dataVersion: number; perform: Perform; announce: (message: string) => void; openConnect: () => void }
-export const FILE_REQUEST_NOTE = 'Files arrive unencrypted on pCloud first. The app encrypts and moves them when it runs.'
+export const FILE_REQUEST_NOTE = 'Files arrive unencrypted on pCloud first. The app encrypts and moves them when it runs. Files already in the folder stay where they are.'
 
 export function FileRequestPage({ status, protection, busy, dataVersion, perform, announce, openConnect }: Props) {
   const [requests, setRequests] = useState<FileRequest[]>([])

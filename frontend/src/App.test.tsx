@@ -47,6 +47,23 @@ describe('pCloud Vault interface', () => {
     expect(await screen.findByText('Cached files stay encrypted on this computer.')).toBeInTheDocument()
   })
 
+  it('moves every selected Vault item to the trash, not only the first', async () => {
+    render(<App />)
+    const work = (await screen.findByText('Work')).closest('[role="button"]') as HTMLElement
+    const travel = screen.getByText('Travel').closest('[role="button"]') as HTMLElement
+    fireEvent.click(work)
+    fireEvent.click(travel, { ctrlKey: true })
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Move to trash' }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('Work')
+    expect(dialog).toHaveTextContent('Travel')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to trash' }))
+    await waitFor(() => expect(screen.queryByText('Travel')).not.toBeInTheDocument())
+    expect(screen.queryByText('Work')).not.toBeInTheDocument()
+    expect(screen.getByText('Notes.md')).toBeInTheDocument()
+  })
+
   it('creates a folder in the labeled demo workspace', async () => {
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'New' }))
@@ -125,6 +142,104 @@ describe('pCloud Vault interface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Root' }))
     expect(await screen.findByText('Notes.md')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Go up one folder' })).not.toBeInTheDocument()
+  })
+
+  it('opens the folder that was double-clicked; selecting never inserts space above the rows', async () => {
+    render(<App />)
+    fireEvent.click(screen.getByText('pCloud Files'))
+    const handbook = (await screen.findByText('Team handbook')).closest<HTMLElement>('[role="button"]')!
+    const slot = screen.getByTestId('selection-slot')
+    expect(slot.querySelector('.selection-bar')).toBeNull()
+    expect(slot.compareDocumentPosition(handbook) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(handbook)
+    // The same reserved slot holds the bar, so the rows below it keep their place.
+    expect(screen.getByTestId('selection-slot')).toBe(slot)
+    expect(slot.querySelector('.selection-bar')).not.toBeNull()
+    fireEvent.click(handbook)
+    fireEvent.doubleClick(handbook)
+    expect(await screen.findByText('Onboarding guide.pdf')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Team handbook' })).toBeInTheDocument()
+    expect(screen.queryByText('Beach day.jpg')).not.toBeInTheDocument()
+    expect(screen.getByTestId('selection-slot').querySelector('.selection-bar')).toBeNull()
+  })
+
+  it('renames, moves and trashes pCloud files in pCloud, without vault-only actions', async () => {
+    render(<App />)
+    fireEvent.click(screen.getByText('pCloud Files'))
+    fireEvent.contextMenu(await screen.findByText('Notes.md'))
+    const items = within(screen.getByRole('menu', { name: 'Actions for Notes.md' })).getAllByRole('menuitem').map(item => item.textContent)
+    expect(items).toEqual(['Preview', 'Export copy', 'Get link', 'Copy into Vault', 'Rename', 'Move', 'Move to pCloud trash'])
+    fireEvent.keyDown(window, { key: 'Escape' })
+    const selection = () => document.querySelector<HTMLElement>('.selection-bar')!
+    fireEvent.click(within(selection()).getByRole('button', { name: 'Rename' }))
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('New name'), { target: { value: 'Plain notes.md' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save name' }))
+    fireEvent.click(await screen.findByText('Plain notes.md'))
+    fireEvent.click(within(selection()).getByRole('button', { name: 'Move' }))
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), { target: { value: 'c-handbook' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Move here' }))
+    await waitFor(() => expect(screen.queryByText('Plain notes.md')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByText('Invoice 2025-03.pdf'))
+    expect(within(selection()).queryByRole('button', { name: /Favorite|Offline|Restore/ })).not.toBeInTheDocument()
+    fireEvent.click(within(selection()).getByRole('button', { name: /Move to pCloud trash/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent("Moves it to pCloud's trash. Restore it from pCloud's trash on the website.")
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to pCloud trash' }))
+    await waitFor(() => expect(screen.queryByText('Invoice 2025-03.pdf')).not.toBeInTheDocument())
+    expect(screen.getByRole('status')).toHaveTextContent('Moved to pCloud trash')
+  })
+
+  it('sends cloud move and trash with location cloud', async () => {
+    useNativeBridge()
+    render(<App />)
+    fireEvent.click(screen.getByText('pCloud Files'))
+    fireEvent.click(await screen.findByText('Notes.md'))
+    fireEvent.click(screen.getByRole('button', { name: /Move to pCloud trash/ }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Move to pCloud trash' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('trash_entry', { location: 'cloud', id: 'note' }))
+    fireEvent.click(screen.getByText('Photo.png'))
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }))
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), { target: { value: 'folder' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Move here' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('move_entry', { location: 'cloud', id: 'photo', parentId: 'folder' }))
+  })
+
+  it('confirms before deleting a public link', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Shared' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete link to Invoice 2025-03.pdf' }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('Delete this link?')
+    expect(dialog).toHaveTextContent('People who have it can no longer open the file.')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByText('Invoice 2025-03.pdf')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete link to Invoice 2025-03.pdf' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete link' }))
+    await waitFor(() => expect(screen.queryByText('Invoice 2025-03.pdf')).not.toBeInTheDocument())
+  })
+
+  it('shows only the state for job transfers without a byte total, with a readable protection label', async () => {
+    useNativeBridge()
+    const native = vi.mocked(invoke).getMockImplementation()!
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'get_transfers') return [
+        { id: 'j1', name: 'Documents sync', direction: 'upload', location: 'vault', done: 0, total: 0, state: 'done', error: null, time: Date.now() },
+        { id: 'j2', name: 'Pictures backup', direction: 'upload', location: 'cloud', done: 0, total: 0, state: 'active', error: null, time: Date.now() },
+        { id: 'j3', name: 'Report.pdf', direction: 'upload', location: 'cloud', done: 50, total: 100, state: 'active', error: null, time: Date.now() },
+      ] as never
+      return native(command, args)
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    const queue = screen.getByRole('region', { name: 'Upload queue' })
+    expect(await within(queue).findByText('Documents sync')).toBeInTheDocument()
+    expect(within(queue).queryByText('0 B of 0 B')).not.toBeInTheDocument()
+    expect(within(queue).getAllByText(/ of /)).toHaveLength(1)
+    expect(within(queue).getByText('Done')).toBeInTheDocument()
+    expect(within(queue).getByText('Working…')).toBeInTheDocument()
+    expect(within(queue).getByText('50%')).toBeInTheDocument()
+    expect(within(queue).getAllByText('Not encrypted')).toHaveLength(2)
+    expect(within(queue).getAllByText('Encrypted')).toHaveLength(1)
   })
 
   it('offers folder export from selection', async () => {
@@ -214,15 +329,25 @@ describe('pCloud Vault interface', () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('Notes.md')
   })
 
-  it('shows matching files when searching from Settings and clears search on navigation', async () => {
+  it('shows search only on the file pages and opens it with Ctrl+K from other pages', async () => {
     useNativeBridge()
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
-    expect(await screen.findByLabelText('Cache limit')).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Search files'), { target: { value: 'photo' } })
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('list_entries', { location: 'vault', parentId: null, query: 'photo', view: 'files' }))
-    expect(screen.queryByLabelText('Cache limit')).not.toBeInTheDocument()
+    expect(await screen.findByLabelText('Search files')).toHaveAttribute('placeholder', 'Search the Vault')
+    for (const label of ['Upload', 'Back up', 'Sync', 'Photos', 'Shared', 'File request', 'About', 'Account', 'Help', 'Settings']) {
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(screen.queryByLabelText('Search files')).not.toBeInTheDocument()
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'pCloud Files' }))
+    expect(screen.getByLabelText('Search files')).toHaveAttribute('placeholder', 'Search pCloud Files')
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(await screen.findByLabelText('Cache limit')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    await waitFor(() => expect(screen.getByLabelText('Search files')).toHaveFocus())
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('pCloud Files')
+    fireEvent.change(screen.getByLabelText('Search files'), { target: { value: 'photo' } })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('list_entries', { location: 'cloud', parentId: null, query: 'photo', view: 'files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pCloud Files' }))
     expect(screen.getByLabelText('Search files')).toHaveValue('')
   })
 
@@ -375,7 +500,7 @@ describe('pCloud Vault interface', () => {
     fireEvent.click(screen.getByRole('button', { name: /Uploading 3 files…/ }))
     const drawer = screen.getByRole('complementary', { name: 'Activity and transfers' })
     expect(within(drawer).getByText('Report.pdf')).toBeInTheDocument()
-    expect(within(drawer).getAllByRole('img', { name: /Encrypted: Only you can read this/ }).length).toBe(3)
+    expect(within(drawer).getAllByText('Encrypted')).toHaveLength(3)
     fireEvent.click(within(drawer).getByRole('button', { name: 'Clear finished' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('clear_transfers', {}))
     fireEvent.keyDown(window, { key: 'Escape' })

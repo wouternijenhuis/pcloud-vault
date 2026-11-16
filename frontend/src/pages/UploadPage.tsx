@@ -15,13 +15,14 @@ type Props = {
   transfers: Transfer[]
   desktop: boolean
   busy: boolean
+  dataVersion: number
   perform: Perform
   openSettings: () => void
   openConnect: () => void
   openUnlock: () => void
 }
 
-export function UploadPage({ status, protection, transfers, desktop, busy, perform, openSettings, openConnect, openUnlock }: Props) {
+export function UploadPage({ status, protection, transfers, desktop, busy, dataVersion, perform, openSettings, openConnect, openUnlock }: Props) {
   const [target, setTarget] = useState<Target>(() => defaultTarget(protection))
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -43,12 +44,15 @@ export function UploadPage({ status, protection, transfers, desktop, busy, perfo
   }
   const browseFolder = () => { if (!blocked && !busy) void perform(() => runExtra('upload_folder', where), done) }
   const uploads = transfers.filter(item => item.direction === 'upload')
+  // Starting or finishing an upload can add folders, so the folder chooser lists them again after either.
+  const finishedUploads = uploads.filter(item => item.state === 'done').map(item => item.id).join(',')
+  const folderRefreshKey = `${dataVersion}:${finishedUploads}`
 
   return <div className="page upload-page">
     <PageHeader title="Upload" description="Send files and folders from this computer to the cloud. The originals stay where they are." />
     <section className="upload-destination" aria-label="Upload destination">
       <h3>Upload to</h3>
-      <DestinationPicker protection={protection} value={target} onChange={changeTarget} folders onOpenSettings={openSettings} />
+      <DestinationPicker protection={protection} value={target} onChange={changeTarget} folders onOpenSettings={openSettings} refreshKey={folderRefreshKey} />
     </section>
     <div className={`dropzone ${encrypted ? 'enc' : 'plain'} ${dragging ? 'dragging' : ''} ${blocked ? 'blocked' : ''}`}
       onDragOver={event => { if (!desktop) { event.preventDefault(); setDragging(true) } }}

@@ -33,6 +33,9 @@ pub struct RequestRule {
     pub folder_id: u64,
     /// Vault folder that received files are moved into (None = Vault root).
     pub vault_folder_id: Option<String>,
+    /// Files already in the folder when the request was created; never moved.
+    #[serde(default)]
+    pub existing: Vec<u64>,
 }
 
 #[derive(Serialize)]
@@ -425,24 +428,25 @@ fn cloud_photos(s: &Inner) -> AppResult<Vec<Photo>> {
     }
     let client = s.client()?;
     let reserved = locked(&s.settings)?.remote_folder;
-    let tree = client.list_tree(0).map_err(|e| e.to_string())?;
-    // Exclude everything below the vault's own storage folder.
-    let mut excluded = std::collections::BTreeSet::new();
-    if let Some(reserved) = reserved {
-        excluded.insert(reserved);
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for item in tree.iter().filter(|m| m.is_folder) {
-                if excluded.contains(&item.parent_folder_id) && excluded.insert(item.id) {
-                    changed = true;
-                }
-            }
+    // pCloud refuses a recursive listing of the whole account (error 1101), so list the
+    // top level and then each top-level folder recursively, skipping the Vault's storage.
+    let mut tree = client.list_folder(0).map_err(|e| e.to_string())?;
+    let folders: Vec<u64> = tree
+        .iter()
+        .filter(|m| {
+            m.is_folder && Some(m.id) != reserved && !m.name.eq_ignore_ascii_case(".pcloud-vault")
+        })
+        .map(|m| m.id)
+        .collect();
+    for folder in folders {
+        match client.list_tree(folder) {
+            Ok(items) => tree.extend(items),
+            Err(error) => s.log(&format!("Photos skipped a pCloud folder: {error}"), "error"),
         }
     }
     let photos: Vec<Photo> = tree
         .into_iter()
-        .filter(|m| !m.is_folder && is_image(&m.name) && !excluded.contains(&m.parent_folder_id))
+        .filter(|m| !m.is_folder && is_image(&m.name))
         .map(|m| Photo {
             id: format!("f{}", m.id),
             name: m.name,
@@ -899,10 +903,18 @@ pub async fn create_file_request(
             )
             .map_err(|e| e.to_string())?;
         if encrypt {
+            let existing = client
+                .list_folder(folder)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|m| !m.is_folder)
+                .map(|m| m.id)
+                .collect();
             locked(&s.settings)?.file_requests.push(RequestRule {
                 link_id: link.id,
                 folder_id: folder,
                 vault_folder_id,
+                existing,
             });
             s.save_settings()?;
         }
@@ -950,7 +962,11 @@ pub(crate) fn encrypt_received(s: &Arc<Inner>) -> AppResult<usize> {
                 continue;
             }
         };
-        for file in files.into_iter().filter(|m| !m.is_folder) {
+        // Only files received through the request, never what was already there.
+        for file in files
+            .into_iter()
+            .filter(|m| !m.is_folder && !rule.existing.contains(&m.id))
+        {
             if cloud_safe(s, &client, file.id, false).is_err() {
                 continue;
             }

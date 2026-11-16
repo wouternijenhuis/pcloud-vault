@@ -273,13 +273,18 @@ code, .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; f
 .file-card .row-actions { position: absolute; top: 8px; right: 8px; }
 .file-card .card-meta { display: flex; justify-content: space-between; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .file-card .modified, .file-card .file-size { display: none; }
-.selection-bar { position: sticky; bottom: 8px; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-height: 44px; margin: 12px 0 0; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); font-size: 13.5px; }
-.selection-bar > span { font-weight: 700; }
+/* Fixed height, always rendered: selecting a row must never move the rows below it. */
+.selection-slot { height: 44px; margin: 12px 0 0; }
+.selection-hint { display: flex; align-items: center; height: 100%; margin: 0; padding: 0 12px; color: var(--muted); font-size: 12.5px; }
+.selection-bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 14px; height: 100%; padding: 0 12px; overflow-x: auto; overflow-y: hidden; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); font-size: 13.5px; }
+.selection-bar > * { flex-shrink: 0; }
+.selection-bar > span { font-weight: 700; white-space: nowrap; }
 .selection-bar button:not(.icon-button) { display: inline-flex; align-items: center; gap: 5px; border: 0; padding: 5px 2px; background: transparent; color: var(--accent-ink); font-size: 13.5px; font-weight: 600; white-space: nowrap; }
 .selection-bar button:not(.icon-button):hover { text-decoration: underline; }
 .selection-bar .remove-action { color: var(--danger) !important; }
 .selection-bar .icon-button { width: 30px; height: 30px; margin-left: auto; }
-.selection-note { display: inline-flex; align-items: center; gap: 6px; flex-basis: 100%; color: var(--enc); font-size: 12.5px; }
+.selection-bar > .selection-note { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--enc); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.selection-note svg { vertical-align: -2px; }
 .drop-hint { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin: 24px 0 0; padding: 14px; border: 1px dashed var(--line-strong); border-radius: 10px; color: var(--muted); font-size: 13px; text-align: center; }
 .drop-hint svg { color: var(--accent-ink); }
 .drop-hint button { border: 0; padding: 2px; background: transparent; color: var(--accent-ink); font-size: 13px; font-weight: 600; text-decoration: underline; }

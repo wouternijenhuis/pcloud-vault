@@ -32,17 +32,19 @@ export function StatusBar({ transfers, pendingCount, open, onToggle }: Props) {
 export function TransferList({ transfers, empty }: { transfers: Transfer[]; empty: string }) {
   if (!transfers.length) return <p className="mini-empty">{empty}</p>
   return <ul className="transfer-list">{transfers.map(item => {
-    const percent = item.total ? Math.min(100, Math.round(item.done / item.total * 100)) : item.state === 'done' ? 100 : 0
-    const state = item.state === 'queued' ? 'Waiting' : item.state === 'active' ? `${percent}%` : item.state === 'done' ? 'Done' : item.error ?? 'Failed'
+    // Backup and sync jobs report no byte total; show only their state, never "0 B of 0 B".
+    const sized = item.total > 0
+    const percent = sized ? Math.min(100, Math.round(item.done / item.total * 100)) : item.state === 'done' ? 100 : 0
+    const state = item.state === 'queued' ? 'Waiting' : item.state === 'active' ? (sized ? `${percent}%` : 'Working…') : item.state === 'done' ? 'Done' : item.error ?? 'Failed'
     return <li key={item.id} className={`transfer-item ${item.state}`}>
       <div className="transfer-row">
         {item.direction === 'upload' ? <ArrowUpFromLine size={14} aria-label="Upload" /> : <ArrowDownToLine size={14} aria-label="Download" />}
         <strong title={item.name}>{item.name}</strong>
-        <ProtectionBadge location={item.location} compact />
+        <ProtectionBadge location={item.location} />
         <span className="transfer-state">{state}</span>
       </div>
       <div className="progress" role="progressbar" aria-label={`${item.name} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></div>
-      <small>{formatSize(item.done)} of {formatSize(item.total)}</small>
+      {sized && <small>{formatSize(item.done)} of {formatSize(item.total)}</small>}
     </li>
   })}</ul>
 }

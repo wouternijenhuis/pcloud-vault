@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Check, Copy, ExternalLink, File, Folder, Link2, ShieldCheck, Trash2, Users, X } from 'lucide-react'
 import { listLinks, listShares, runExtra } from '../api'
+import { Dialog } from '../components/Dialog'
 import { CloudGate, PageHeader } from '../components/Gates'
 import { ProtectionBadge } from '../components/ProtectionBadge'
 import { copyText, errorMessage, timeLabel, plural } from '../format'
@@ -15,6 +16,8 @@ export function SharedPage({ status, busy, dataVersion, perform, announce, openC
   const [links, setLinks] = useState<PublicLink[]>([])
   const [shares, setShares] = useState<Share[]>([])
   const [problem, setProblem] = useState('')
+  const [linkToDelete, setLinkToDelete] = useState<PublicLink | null>(null)
+  const closeDelete = useCallback(() => { if (!busy) setLinkToDelete(null) }, [busy])
   const connected = status?.connected ?? false
   useEffect(() => {
     if (!connected) return
@@ -26,6 +29,12 @@ export function SharedPage({ status, busy, dataVersion, perform, announce, openC
   }, [connected, dataVersion])
   const header = <PageHeader title="Shared" description="Links and folders you share from pCloud Files, and folders others share with you." />
   if (!connected) return <div className="page">{header}<CloudGate connect={openConnect} what="share files and folders" /></div>
+  const deleteLink = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const link = linkToDelete
+    if (link) await perform(() => runExtra('delete_link', { id: link.id }), 'Link deleted')
+    setLinkToDelete(null)
+  }
   const copy = (url: string) => void copyText(url).then(ok => announce(ok ? 'Link copied' : 'Could not copy the link'))
   const incoming = shares.filter(share => share.direction === 'incoming')
   const outgoing = shares.filter(share => share.direction === 'outgoing')
@@ -54,7 +63,7 @@ export function SharedPage({ status, busy, dataVersion, perform, announce, openC
           <div className="list-actions">
             <button type="button" className="button button-subtle" onClick={() => copy(link.url)} aria-label={`Copy link to ${link.name}`}><Copy size={14} /> Copy</button>
             <button type="button" className="button button-subtle" onClick={() => void perform(() => runExtra('open_url', { url: link.url }))} aria-label={`Open link to ${link.name}`}><ExternalLink size={14} /> Open</button>
-            <button type="button" className="button button-ghost-danger" disabled={busy} onClick={() => void perform(() => runExtra('delete_link', { id: link.id }), 'Link deleted')} aria-label={`Delete link to ${link.name}`}><Trash2 size={14} /> Delete</button>
+            <button type="button" className="button button-ghost-danger" disabled={busy} onClick={() => setLinkToDelete(link)} aria-label={`Delete link to ${link.name}`}><Trash2 size={14} /> Delete</button>
           </div>
         </li>)}</ul>}
     </section> : <section className="card-list" aria-label="Shared folders">
@@ -63,5 +72,8 @@ export function SharedPage({ status, busy, dataVersion, perform, announce, openC
       <h3>Shared by you</h3>
       {outgoing.length ? <ul className="list">{outgoing.map(shareRow)}</ul> : <p className="mini-empty">You are not sharing any folders. In pCloud Files, select a folder and choose Share folder.</p>}
     </section>}
+    {linkToDelete && <Dialog title="Delete this link?" description={`People who have it can no longer open the ${linkToDelete.isFolder ? 'folder' : 'file'}.`} onClose={closeDelete} onSubmit={event => void deleteLink(event)} submitLabel="Delete link" busy={busy} danger>
+      <p className="confirm-item">{linkToDelete.isFolder ? <Folder size={18} /> : <File size={18} />}{linkToDelete.name}</p>
+    </Dialog>}
   </div>
 }

@@ -11,6 +11,8 @@ type Props = {
   /** Show the folder chooser for the selected side. */
   folders?: boolean
   onOpenSettings?: () => void
+  /** Changes whenever the folders may have changed (for example after an upload finishes), so the chooser lists them again. */
+  refreshKey?: string | number
 }
 
 export const rootTarget = (location: Location): Target => ({ location, folderId: null, label: rootLabel(location) })
@@ -23,7 +25,7 @@ const LOCK_REASON: Record<Location, string> = {
 }
 
 /** Two large cards make the encrypted/unencrypted choice explicit, then an optional folder chooser. */
-export function DestinationPicker({ protection, value, onChange, folders = false, onOpenSettings }: Props) {
+export function DestinationPicker({ protection, value, onChange, folders = false, onOpenSettings, refreshKey }: Props) {
   const locked = lockedLocation(protection)
   useEffect(() => { if (locked && value.location !== locked) onChange(rootTarget(locked)) }, [locked, value.location, onChange])
   const card = (location: Location) => {
@@ -43,14 +45,14 @@ export function DestinationPicker({ protection, value, onChange, folders = false
   return <div className="destination-picker">
     <div className="destination-cards" role="radiogroup" aria-label="Destination">{card('vault')}{card('cloud')}</div>
     {locked && <p className="destination-lock">{LOCK_REASON[locked]}{onOpenSettings && <> <button type="button" className="link-button" onClick={onOpenSettings}>Change in Settings</button></>}</p>}
-    {folders && <FolderChooser value={value} onChange={onChange} />}
+    {folders && <FolderChooser value={value} onChange={onChange} refreshKey={refreshKey} />}
   </div>
 }
 
 type Crumb = { id: string; name: string }
 
 /** Browses folders on one side (Vault or pCloud); the folder being shown is the chosen one. */
-export function FolderChooser({ value, onChange }: { value: Target; onChange: (value: Target) => void }) {
+export function FolderChooser({ value, onChange, refreshKey }: { value: Target; onChange: (value: Target) => void; refreshKey?: string | number }) {
   const [path, setPath] = useState<Crumb[]>([])
   const [folders, setFolders] = useState<Crumb[]>([])
   const [problem, setProblem] = useState('')
@@ -64,7 +66,7 @@ export function FolderChooser({ value, onChange }: { value: Target; onChange: (v
     listEntries(location, parentId, null, 'files')
       .then(items => { if (id === request.current) setFolders((Array.isArray(items) ? items : []).filter(item => item.kind === 'folder').map(item => ({ id: item.id, name: item.name }))) })
       .catch(() => { if (id === request.current) { setFolders([]); setProblem(location === 'vault' ? 'Unlock the Vault to choose a folder in it.' : 'Connect pCloud to choose a folder in it.') } })
-  }, [location, parentId])
+  }, [location, parentId, refreshKey])
   const go = (next: Crumb[]) => {
     setPath(next)
     const label = [rootLabel(location), ...next.map(item => item.name)].join(' / ')

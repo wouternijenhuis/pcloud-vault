@@ -14,6 +14,7 @@ pCloud Vault now offers the sections of a full pCloud client, with encryption wh
 - **File requests**, optionally moving received files into the Vault automatically.
 - **Account** (storage use), **Help**, **About**, and a status bar with upload and download activity.
 - Settings for theme (System, Light or Dark) and starting at sign-in.
+- **pCloud Files** can now be renamed, moved and moved to pCloud's trash, and actions on several selected items apply to all of them.
 - No new third-party libraries: folder scanning, recycling and thumbnails use what the app already had.
 
 ## [0.2.0]

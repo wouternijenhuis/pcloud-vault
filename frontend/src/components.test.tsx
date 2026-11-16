@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DestinationPicker, rootTarget } from './components/DestinationPicker'
 import { ProtectionBadge } from './components/ProtectionBadge'
 import { FileRequestDialog, FILE_REQUEST_NOTE } from './pages/FileRequestPage'
-import { resetDemo } from './api'
+import { resetDemo, runAction } from './api'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 
@@ -54,6 +54,19 @@ describe('DestinationPicker', () => {
     render(<DestinationPicker protection="choose" value={rootTarget('vault')} onChange={onChange} folders />)
     fireEvent.click(await screen.findByRole('button', { name: 'Open Work' }))
     expect(onChange).toHaveBeenLastCalledWith({ location: 'vault', folderId: 'f-work', label: 'Vault / Work' })
+  })
+})
+
+describe('FolderChooser refresh', () => {
+  it('lists folders again when the refresh key changes, for example after an upload finishes', async () => {
+    const props = { protection: 'choose' as const, value: rootTarget('cloud'), onChange: vi.fn(), folders: true }
+    const { rerender } = render(<DestinationPicker {...props} refreshKey="0:" />)
+    expect(await screen.findByRole('button', { name: 'Open Camera roll' })).toBeInTheDocument()
+    await runAction('new_folder', { location: 'cloud', parentId: null, name: 'Uploaded folder' })
+    rerender(<DestinationPicker {...props} refreshKey="0:" />)
+    expect(screen.queryByRole('button', { name: 'Open Uploaded folder' })).not.toBeInTheDocument()
+    rerender(<DestinationPicker {...props} refreshKey="0:t-upload" />)
+    expect(await screen.findByRole('button', { name: 'Open Uploaded folder' })).toBeInTheDocument()
   })
 })
 
