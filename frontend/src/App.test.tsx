@@ -64,6 +64,19 @@ describe('pCloud Vault interface', () => {
     expect(screen.getByText('Notes.md')).toBeInTheDocument()
   })
 
+  it('adds a mixed selection to favorites instead of flipping each item', async () => {
+    render(<App />)
+    const work = (await screen.findByText('Work')).closest('[role="button"]') as HTMLElement
+    fireEvent.click(work)
+    fireEvent.click(screen.getByText('Travel').closest('[role="button"]') as HTMLElement, { ctrlKey: true })
+    const selection = document.querySelector<HTMLElement>('.selection-bar')!
+    fireEvent.click(within(selection).getByRole('button', { name: 'Add to favorites' }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Added to favorites'))
+    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }))
+    expect(await screen.findByText('Travel')).toBeInTheDocument()
+    expect(screen.getByText('Work')).toBeInTheDocument()
+  })
+
   it('creates a folder in the labeled demo workspace', async () => {
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'New' }))
@@ -130,7 +143,7 @@ describe('pCloud Vault interface', () => {
     const favorite = await screen.findByText('Project brief.pdf')
     fireEvent.click(favorite)
     const selection = document.querySelector<HTMLElement>('.selection-bar')!
-    expect(within(selection).getByRole('button', { name: /Favorite/ })).toBeInTheDocument()
+    expect(within(selection).getByRole('button', { name: 'Remove from favorites' })).toBeInTheDocument()
     expect(within(selection).queryByRole('button', { name: /Copy into Vault/ })).not.toBeInTheDocument()
   })
 

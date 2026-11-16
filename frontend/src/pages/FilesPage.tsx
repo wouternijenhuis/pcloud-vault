@@ -77,7 +77,9 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
     if (entry.kind === 'folder') { reset(); setPath(items => [...items, entry]) }
     else openPreview({ location, id: entry.id, name: entry.name, size: entry.size, modified: entry.modified })
   }
-  const selectedEntry = entries.find(item => item.id === selected[0]) ?? null
+  const selectedEntry = entries.find(item => selected.includes(item.id)) ?? null
+  // Drop selected items that a refresh or search no longer shows, so actions match the bar.
+  useEffect(() => { setSelected(value => { const kept = value.filter(id => entries.some(item => item.id === id)); return kept.length === value.length ? value : kept }) }, [entries])
   // The selection drives the selection bar; `current` only pins the item an open dialog acts on.
   const activeEntry = current ?? selectedEntry
   // Items an open move/trash dialog acts on: the pinned item, or every selected item.
@@ -99,14 +101,23 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
   const renameAction = (entry: Entry): MenuItem => ({ label: 'Rename', run: () => { setCurrent(entry); setFormName(entry.name); setModal('rename') } })
   const moveAction = (entry: Entry, count = 1): MenuItem => ({ label: 'Move', run: () => { setCurrent(count === 1 ? entry : null); setFormName(''); setModal('move') } })
   const trashAction = (entry: Entry, count: number, label: string): MenuItem => ({ label, icon: <Trash2 size={15} />, danger: true, run: () => { setCurrent(count === 1 ? entry : null); setModal('delete') } })
-  /** Runs a per-item command on the selection (or one item) and reports once. */
-  const forEach = (entry: Entry, count: number, command: (item: Entry) => Promise<unknown>, success: string) => void act(async () => {
-    const items = count === 1 ? [entry] : entries.filter(item => selected.includes(item.id))
+  /** The items an action applies to: the clicked item, or every selected item. */
+  const itemsFor = (entry: Entry, count: number) => count === 1 ? [entry] : entries.filter(item => selected.includes(item.id))
+  /** Runs a per-item command and reports once. */
+  const forEach = (items: Entry[], command: (item: Entry) => Promise<unknown>, success: string) => void act(async () => {
     for (const item of items) await command(item)
   }, success)
+  /** Favorite and Offline set one state for all items (they toggle per item, so skip those already there). */
+  const setFlag = (items: Entry[], flag: 'starred' | 'pinned', command: 'toggle_favorite' | 'toggle_pin', success: string) => {
+    const target = !items.every(item => item[flag])
+    forEach(items.filter(item => item[flag] !== target), item => runAction(command, { id: item.id }), success)
+  }
   /** One action list for the selection bar and the right-click menu, so both always match. */
   const entryActions = (entry: Entry | null, count: number): MenuItem[] => {
     if (!entry) return []
+    const items = itemsFor(entry, count)
+    const allStarred = items.every(item => item.starred)
+    const allPinned = items.every(item => item.pinned)
     const exportCopy: MenuItem[] = count === 1 ? [{ label: 'Export copy', icon: <ArrowDownToLine size={15} />, run: () => void exportEntry(entry) }] : []
     if (!vault) return [
       ...exportCopy,
@@ -117,23 +128,21 @@ export function FilesPage({ location, status, query, desktop, busy, dataVersion,
       moveAction(entry, count),
       trashAction(entry, count, 'Move to pCloud trash'),
     ]
-    if (view === 'trash') return [{ label: 'Restore', run: () => forEach(entry, count, item => runAction('restore_entry', { location, id: item.id }), count === 1 ? 'Item restored' : `${count} items restored`) }]
+    if (view === 'trash') return [{ label: 'Restore', run: () => forEach(items, item => runAction('restore_entry', { location, id: item.id }), items.length === 1 ? 'Item restored' : `${items.length} items restored`) }]
     return [
       ...exportCopy,
       ...(count === 1 ? [renameAction(entry)] : []),
       moveAction(entry, count),
-      { label: 'Favorite', icon: <Star size={15} />, run: () => forEach(entry, count, item => runAction('toggle_favorite', { id: item.id }), 'Favorite updated') },
-      { label: 'Offline', icon: <HardDrive size={15} />, run: () => forEach(entry, count, item => runAction('toggle_pin', { id: item.id }), 'Offline access updated') },
+      { label: allStarred ? 'Remove from favorites' : 'Add to favorites', icon: <Star size={15} />, run: () => setFlag(items, 'starred', 'toggle_favorite', allStarred ? 'Removed from favorites' : 'Added to favorites') },
+      { label: allPinned ? 'Remove offline copy' : 'Keep offline', icon: <HardDrive size={15} />, run: () => setFlag(items, 'pinned', 'toggle_pin', allPinned ? 'Offline copy removed' : 'Kept offline') },
       trashAction(entry, count, 'Move to trash'),
     ]
   }
   const menuItems = (entry: Entry): MenuItem[] => {
     const open: MenuItem = { label: entry.kind === 'folder' ? 'Open' : 'Preview', icon: entry.kind === 'folder' ? <Folder size={15} /> : <Eye size={15} />, run: () => openEntry(entry) }
-    const labels: Record<string, string> = {
-      Favorite: entry.starred ? 'Remove from favorites' : 'Add to favorites',
-      Offline: entry.pinned ? 'Remove offline copy' : 'Keep offline',
-    }
-    return [...(view === 'trash' ? [] : [open]), ...entryActions(entry, 1).map(item => ({ ...item, label: labels[item.label] ?? item.label }))]
+    // Right-clicking an item of a multi-selection acts on the whole selection, like the bar.
+    const count = selected.length > 1 && selected.includes(entry.id) ? selected.length : 1
+    return [...(view === 'trash' || count > 1 ? [] : [open]), ...entryActions(entry, count)]
   }
   const openMenu = (entry: Entry, x: number, y: number) => { setCurrent(null); setSelected(value => value.includes(entry.id) ? value : [entry.id]); setMenu({ x, y, entry }) }
   const closeMenu = useCallback(() => setMenu(null), [])

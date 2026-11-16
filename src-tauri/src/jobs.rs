@@ -56,12 +56,34 @@ pub struct JobView {
 pub(crate) fn plain_path(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        PathBuf::from(format!(r"\\{rest}"))
-    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
-        PathBuf::from(rest)
-    } else {
-        path
+        return PathBuf::from(format!(r"\\{rest}"));
     }
+    // Only plain drive paths (`X:\...`); volume GUID and other device paths stay as they are.
+    match text.strip_prefix(r"\\?\") {
+        Some(rest)
+            if rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                && rest.get(1..3) == Some(":\\") =>
+        {
+            PathBuf::from(rest)
+        }
+        _ => path,
+    }
+}
+
+/// True when `local` is the same as, inside, or around another job's folder.
+fn overlaps_job(local: &Path, jobs: &[FolderJob], replaces: Option<&str>) -> bool {
+    let mine = comparable_path(local);
+    jobs.iter()
+        .filter(|j| Some(j.id.as_str()) != replaces)
+        .map(|j| comparable_path(&j.local_path))
+        .any(|other| mine.starts_with(&other) || other.starts_with(&mine))
+}
+
+/// Canonical, comparable form of a job folder (same form for new and stored jobs).
+fn comparable_path(path: &Path) -> PathBuf {
+    path_key(&plain_path(
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+    ))
 }
 
 fn index_dir(s: &Inner) -> PathBuf {
@@ -333,17 +355,8 @@ pub async fn add_job(
                 return Err("Wait until the current backup or sync finishes.".into());
             }
         }
-        for other in locked(&s.settings)?
-            .jobs
-            .iter()
-            .filter(|j| Some(&j.id) != replaces.as_ref())
-        {
-            let other = std::fs::canonicalize(&other.local_path).unwrap_or(other.local_path.clone());
-            if path_key(&local).starts_with(path_key(&other))
-                || path_key(&other).starts_with(path_key(&local))
-            {
-                return Err("This folder overlaps a folder that is already backed up or synced. Choose a different folder.".into());
-            }
+        if overlaps_job(&local, &locked(&s.settings)?.jobs, replaces.as_deref()) {
+            return Err("This folder overlaps a folder that is already backed up or synced. Choose a different folder.".into());
         }
         let folder_id = resolve_destination(
             &s,
@@ -985,6 +998,36 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_job_folders_are_detected_whatever_form_was_stored() {
+        let directory = tempfile::tempdir().unwrap();
+        let photos = directory.path().join("Photos");
+        let year = photos.join("2024");
+        let other = directory.path().join("Music");
+        for path in [&year, &other] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let job = |path: PathBuf| FolderJob {
+            id: folders::new_job_id(),
+            kind: JobKind::Backup,
+            local_path: path,
+            location: TargetLocation::Vault,
+            folder_id: None,
+            paused: false,
+            mirror_deletions: false,
+            last_run: None,
+        };
+        // A job stored before 0.3 kept the raw canonical (on Windows: verbatim) path.
+        let stored = vec![job(fs::canonicalize(&photos).unwrap())];
+        assert!(overlaps_job(&photos, &stored, None));
+        assert!(overlaps_job(&year, &stored, None));
+        assert!(overlaps_job(directory.path(), &stored, None));
+        assert!(!overlaps_job(&other, &stored, None));
+        assert!(!overlaps_job(&photos, &stored, Some(&stored[0].id)));
+        let plain = vec![job(plain_path(fs::canonicalize(&photos).unwrap()))];
+        assert!(overlaps_job(&year, &plain, None));
+    }
+
+    #[test]
     fn verbatim_windows_paths_are_shown_plainly() {
         assert_eq!(
             plain_path(PathBuf::from(r"\\?\D:\Data\Docs")),
@@ -998,6 +1041,8 @@ mod tests {
             plain_path(PathBuf::from("/home/x")),
             PathBuf::from("/home/x")
         );
+        let volume = PathBuf::from(r"\\?\Volume{0000}\Docs");
+        assert_eq!(plain_path(volume.clone()), volume);
     }
 
     #[test]

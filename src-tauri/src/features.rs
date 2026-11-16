@@ -438,11 +438,33 @@ fn cloud_photos(s: &Inner) -> AppResult<Vec<Photo>> {
         })
         .map(|m| m.id)
         .collect();
-    for folder in folders {
+    /// Lists a folder recursively; if pCloud refuses (very large trees), goes one level down.
+    fn collect(
+        s: &Inner,
+        client: &Client,
+        folder: u64,
+        depth: usize,
+        out: &mut Vec<pcloud_api::Metadata>,
+    ) {
         match client.list_tree(folder) {
-            Ok(items) => tree.extend(items),
+            Ok(items) => out.extend(items),
+            Err(_) if depth < 4 => match client.list_folder(folder) {
+                Ok(items) => {
+                    for item in items {
+                        if item.is_folder {
+                            collect(s, client, item.id, depth + 1, out);
+                        } else {
+                            out.push(item);
+                        }
+                    }
+                }
+                Err(error) => s.log(&format!("Photos skipped a pCloud folder: {error}"), "error"),
+            },
             Err(error) => s.log(&format!("Photos skipped a pCloud folder: {error}"), "error"),
         }
+    }
+    for folder in folders {
+        collect(s, &client, folder, 0, &mut tree);
     }
     let photos: Vec<Photo> = tree
         .into_iter()
@@ -889,6 +911,19 @@ pub async fn create_file_request(
         if max_files.is_some_and(|n| n == 0 || n > 100_000) {
             return Err("Choose a file limit between 1 and 100000.".into());
         }
+        // Files already in the folder are never moved. Snapshot them before the link exists,
+        // so a failed listing aborts cleanly and early arrivals still count as received.
+        let existing: Vec<u64> = if encrypt {
+            client
+                .list_folder(folder)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|m| !m.is_folder)
+                .map(|m| m.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let link = client
             // pCloud requires a message; it is the only text people uploading see.
             .create_upload_link(
@@ -903,13 +938,6 @@ pub async fn create_file_request(
             )
             .map_err(|e| e.to_string())?;
         if encrypt {
-            let existing = client
-                .list_folder(folder)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .filter(|m| !m.is_folder)
-                .map(|m| m.id)
-                .collect();
             locked(&s.settings)?.file_requests.push(RequestRule {
                 link_id: link.id,
                 folder_id: folder,

@@ -159,6 +159,9 @@ export default function App() {
     // Search only exists on the file pages; from any other page Ctrl+K opens the last file page and focuses its search.
     const shortcut = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return
+      // Never leave a page while the user is typing in one of its forms (or a dialog is open).
+      const typing = event.target instanceof HTMLElement && event.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]') && event.target !== searchInput.current
+      if (typing) return
       event.preventDefault()
       setSection(current => current === 'vault' || current === 'cloud' ? current : lastFiles)
       setFocusSearch(true)
