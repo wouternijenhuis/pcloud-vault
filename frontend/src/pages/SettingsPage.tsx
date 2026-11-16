@@ -77,7 +77,7 @@ export function SettingsPage({ status, preferences, protection, jobs, settings, 
       </section>
     </div>
     <p className="app-origin"><span className="eu-badge">Made in Europe</span> pCloud Vault {__APP_VERSION__} · free and open source (GPL-3.0-only) · not affiliated with pCloud AG</p>
-    {switching && <Dialog title="Switch to encrypted?" description={`New and changed files from ${switching.localPath} will go to the Vault root, encrypted, replacing this ${switching.kind}.`} onClose={() => setSwitching(null)} busy={busy} submitLabel="Switch to encrypted"
+    {switching && <Dialog title="Switch to encrypted?" description={`New and changed files from ${switching.localPath} will go to a new Vault folder named after it, encrypted, replacing this ${switching.kind}.`} onClose={() => setSwitching(null)} busy={busy} submitLabel="Switch to encrypted"
       onSubmit={event => { event.preventDefault(); const job = switching; void switchJob(job).then(done => { if (done) setSwitching(null) }) }}>
       <p className="hint">The copy already in {switching.target.label} stays there, unencrypted. pCloud can still read it. Delete it in pCloud Files when you no longer need it.</p>
     </Dialog>}

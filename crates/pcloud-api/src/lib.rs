@@ -450,6 +450,11 @@ impl Client {
         self.call("deletefolderrecursive", &[("folderid", id.to_string())])
             .map(|_| ())
     }
+    /// Deletes a folder only if it is empty; pCloud refuses non-empty folders.
+    pub fn delete_empty_folder(&self, id: u64) -> Result<()> {
+        self.call("deletefolder", &[("folderid", id.to_string())])
+            .map(|_| ())
+    }
 
     pub fn restore(&self, id: u64, is_folder: bool) -> Result<()> {
         self.call(

@@ -34,9 +34,11 @@ export function FileRequestPage({ status, protection, busy, dataVersion, perform
         <div className="list-text">
           <strong>{request.folderName}</strong>
           <small>{plural(request.filesReceived, 'file')} received{request.maxFiles ? ` of ${request.maxFiles}` : ''} · {request.expires ? `Expires ${timeLabel(request.expires)}` : 'No expiry'}{request.comment ? ` · “${request.comment}”` : ''}</small>
-          <small>{request.encrypt ? `Received files are moved into ${request.vaultFolderName ? `Vault / ${request.vaultFolderName}` : 'the Vault'} and encrypted.` : 'Received files stay in pCloud, not encrypted.'}</small>
+          <small>{request.encrypt ? `Files arrive unencrypted in pCloud. The app then encrypts them into ${request.vaultFolderName ? `Vault / ${request.vaultFolderName}` : 'the Vault'} and moves the plain copy to the pCloud trash.` : 'Received files stay in pCloud, not encrypted.'}</small>
         </div>
-        <ProtectionBadge location={request.encrypt ? 'vault' : 'cloud'} />
+        {/* Uploads always land unencrypted first, so the arrival folder is labelled as such. */}
+        <ProtectionBadge location="cloud" />
+        {request.encrypt && <ProtectionBadge location="vault" />}
         <div className="list-actions">
           <button type="button" className="button button-subtle" aria-label={`Copy link for ${request.folderName}`} onClick={() => void copyText(request.url).then(ok => announce(ok ? 'Link copied' : 'Could not copy the link'))}><Copy size={14} /> Copy link</button>
           <button type="button" className="button button-ghost-danger" disabled={busy} aria-label={`Delete file request for ${request.folderName}`} onClick={() => void perform(() => runExtra('delete_file_request', { id: request.id }), 'File request deleted')}><Trash2 size={14} /> Delete</button>

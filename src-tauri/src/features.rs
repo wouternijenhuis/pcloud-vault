@@ -237,11 +237,13 @@ fn upload_walk(
         .and_then(|n| n.to_str())
         .ok_or("Invalid filename")?;
     if metadata.is_dir() {
+        // Never merge an upload into the Vault's own storage folder.
+        let reserved = locked(&s.settings)?.remote_folder;
         let existing = client
             .list_folder(parent)
             .map_err(|e| e.to_string())?
             .into_iter()
-            .find(|m| m.is_folder && m.name == name);
+            .find(|m| m.is_folder && m.name == name && Some(m.id) != reserved);
         let folder = match existing {
             Some(folder) => folder,
             None => client
@@ -936,7 +938,7 @@ pub(crate) fn encrypt_received(s: &Arc<Inner>) -> AppResult<usize> {
         return Ok(0);
     }
     let client = s.client()?;
-    let mut moved = 0;
+    let mut imported = Vec::new();
     for rule in rules {
         let files = match client.list_folder(rule.folder_id) {
             Ok(files) => files,
@@ -953,16 +955,40 @@ pub(crate) fn encrypt_received(s: &Arc<Inner>) -> AppResult<usize> {
                 continue;
             }
             let worker = s.client()?;
-            match import_cloud_into_vault(s, worker, file.id, rule.vault_folder_id.as_deref()) {
-                Ok(_) => {
-                    client.delete_file(file.id).map_err(|e| e.to_string())?;
-                    moved += 1;
-                }
+            match import_cloud_into_vault(s, worker, file.id, rule.vault_folder_id.as_deref(), true)
+            {
+                Ok(_) => imported.push(file.id),
                 Err(error) => s.log(
                     &format!("A received file stays unencrypted for now: {error}"),
                     "error",
                 ),
             }
+        }
+    }
+    if imported.is_empty() {
+        return Ok(0);
+    }
+    // Only remove the plain copies once the encrypted copies are safely in pCloud.
+    crate::replication::sync(s)?;
+    let pending = locked(&s.vault)?
+        .as_ref()
+        .map(|v| v.pending_object_ids().len())
+        .unwrap_or(0);
+    if pending > 0 {
+        s.log(
+            "Received files were encrypted. Their plain copies are removed after the encrypted copies finish uploading.",
+            "info",
+        );
+        return Ok(0);
+    }
+    let mut moved = 0;
+    for id in imported {
+        match client.delete_file(id) {
+            Ok(()) => moved += 1,
+            Err(error) => s.log(
+                &format!("A plain copy of a received file could not be removed: {error}"),
+                "error",
+            ),
         }
     }
     if moved > 0 {

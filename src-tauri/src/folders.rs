@@ -490,12 +490,14 @@ impl SyncTarget for CloudTarget<'_> {
     fn trash(&mut self, item: &RemoteItem) -> Result<(), String> {
         let id = cloud_numeric_id(item)?;
         if item.is_folder {
-            // `delete_folder` is recursive; re-check emptiness right before calling it.
+            // Non-recursive delete: pCloud itself refuses if anything was added meanwhile.
             let contents = self.client.list_folder(id).map_err(|e| e.to_string())?;
             if !contents.is_empty() {
                 return Err(format!("{} is not empty; kept.", item.rel_path));
             }
-            self.client.delete_folder(id).map_err(|e| e.to_string())?;
+            self.client
+                .delete_empty_folder(id)
+                .map_err(|_| format!("{} is not empty; kept.", item.rel_path))?;
             self.folders.remove(&item.rel_path);
         } else {
             self.client.delete_file(id).map_err(|e| e.to_string())?;
@@ -1168,11 +1170,21 @@ pub fn plan(
 
 /// Turns deletions into re-copies: remote trash becomes a download, local recycle becomes an
 /// upload, and folder removals become folder creation on the side where it is missing.
-pub fn plan_restore(plan: &Plan) -> Plan {
+/// For a sync, held deletions become copies back to the side they were removed from. For a
+/// backup, "keep" means the backup keeps its copies: the files are only forgotten, and
+/// nothing is ever written into the source folder.
+pub fn plan_restore(plan: &Plan, kind: JobKind) -> Plan {
     let mut creates = Vec::new();
     let mut others = Vec::new();
     for action in &plan.actions {
         match action {
+            Action::TrashRemote { item } if kind == JobKind::Backup => {
+                if !item.is_folder {
+                    others.push(Action::ForgetIndex {
+                        rel: item.rel_path.clone(),
+                    })
+                }
+            }
             Action::TrashRemote { item } if item.is_folder => {
                 creates.push(Action::CreateLocalFolder {
                     rel: item.rel_path.clone(),
@@ -1296,7 +1308,7 @@ fn execute(
     };
     outcome.errors.extend(plan.notes.iter().cloned());
     match mode {
-        Mode::Restore => plan = plan_restore(&plan),
+        Mode::Restore => plan = plan_restore(&plan, job.kind),
         Mode::Normal { allow_deletes } => {
             let deletions = deletion_count(&plan);
             // An empty folder (e.g. an unmounted mount point) never deletes without review.
@@ -2555,16 +2567,33 @@ mod tests {
             notes: Vec::new(),
         };
         assert_eq!(
-            plan_restore(&plan).actions,
+            plan_restore(&plan, JobKind::Sync).actions,
             vec![
                 Action::CreateLocalFolder { rel: "dir".into() },
                 Action::CreateRemoteFolder { rel: "gone".into() },
-                Action::Download { item },
+                Action::Download { item: item.clone() },
                 Action::Upload {
                     rel: "b.txt".into(),
                     existing: None
                 },
             ]
+        );
+        // Keeping a backup's copies never writes into the source folder.
+        assert_eq!(
+            plan_restore(
+                &Plan {
+                    actions: vec![
+                        Action::TrashRemote { item },
+                        Action::TrashRemote { item: folder },
+                    ],
+                    notes: Vec::new(),
+                },
+                JobKind::Backup
+            )
+            .actions,
+            vec![Action::ForgetIndex {
+                rel: "a.txt".into()
+            }]
         );
     }
 

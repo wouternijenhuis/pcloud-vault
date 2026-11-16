@@ -56,6 +56,7 @@ The encrypted local checkpoint detects removal of previously observed commits. A
 
 - **Backup and sync jobs** keep a per-job index of file paths, sizes and hashes. For Vault jobs the index is sealed with XChaCha20-Poly1305 under a key derived from the vault root key (HKDF info `local-side-data`, associated data `<vaultId>/sync-<jobId>`) in `vault/side/`, so local paths and names stay encrypted at rest. Indexes of pCloud jobs are plain JSON in `jobs/`, because those files are unencrypted in pCloud anyway. The local folder paths of all jobs are listed in `settings.json`.
 - **Files a sync removes or replaces on this computer** move to `recycle/<job>/<date>/` in the app folder as ordinary, unencrypted files, and are deleted after 30 days.
+- **First backup run into a folder that already has a same-named file:** the app downloads that copy to `recycle/.verify/` only to compare it, and deletes it right after (and on the next run if the app was interrupted). For a Vault backup this is a decrypted copy on disk for that moment.
 - **Photo thumbnails** of Vault images are decrypted and scaled in memory and never written to disk.
 - **Plain destinations are outside the guarantee:** pCloud jobs, uploads to pCloud Files, public links, shared folders and file requests use ordinary pCloud storage that pCloud can read. Files sent through a file request always arrive unencrypted; with "move into the Vault" the app imports and verifies each one, then moves the plain copy to the pCloud trash, where pCloud keeps it for its trash retention period.
 

@@ -1165,7 +1165,7 @@ async fn import_cloud_file(
     task(&state, move |s| {
         let client = s.client()?; let (id, folder) = cloud_id(&id)?; cloud_safe(&s, &client, id, folder)?;
         if folder { return Err("Import individual pCloud files, or download the folder and drag it into Private Vault.".into()); }
-        import_cloud_into_vault(&s, client, id, parent_id.as_deref())?;
+        import_cloud_into_vault(&s, client, id, parent_id.as_deref(), false)?;
         replication::sync(&s)?;
         s.log("Imported and verified an encrypted cloud copy. Original preserved.", "success"); Ok(())
     }).await
@@ -1177,6 +1177,7 @@ pub(crate) fn import_cloud_into_vault(
     client: Client,
     id: u64,
     parent_id: Option<&str>,
+    rename_if_taken: bool,
 ) -> AppResult<Entry> {
     let metadata = client.stat(id, false).map_err(|e| e.to_string())?;
     let tracker = s.transfers.start(
@@ -1190,8 +1191,18 @@ pub(crate) fn import_cloud_into_vault(
     let result = {
         let mut vault = locked(&s.vault)?;
         let vault = vault.as_mut().ok_or("Unlock your vault first")?;
+        let name = if rename_if_taken {
+            let taken: Vec<String> = vault
+                .list(parent_id, false)
+                .into_iter()
+                .map(|e| e.name)
+                .collect();
+            crate::jobs::unique_name(&metadata.name, &taken)
+        } else {
+            metadata.name.clone()
+        };
         let imported = vault
-            .import_file(parent_id, &metadata.name, reader)
+            .import_file(parent_id, &name, reader)
             .map_err(|e| e.to_string());
         let transferred = download
             .join()

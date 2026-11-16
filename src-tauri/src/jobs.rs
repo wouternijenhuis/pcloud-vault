@@ -162,19 +162,45 @@ pub async fn list_jobs(state: State<'_, AppState>) -> AppResult<Vec<JobView>> {
     .await
 }
 
-/// Resolves the destination folder, creating one named after the local folder when the
-/// user picked the Vault or pCloud root, so a job never mixes with unrelated files.
+/// Picks a folder name at the top level that is not used yet: "Documents", "Documents (2)"…
+pub(crate) fn unique_name(name: &str, taken: &[String]) -> String {
+    let taken: HashSet<String> = taken.iter().map(|n| n.to_lowercase()).collect();
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                name.to_string()
+            } else {
+                format!("{name} ({n})")
+            }
+        })
+        .find(|candidate| !taken.contains(&candidate.to_lowercase()))
+        .unwrap_or_else(|| name.to_string())
+}
+
+const BACKUP_NEEDS_EMPTY: &str = "That folder already contains files. Choose an empty folder for a backup, or choose the top level and the app creates a new folder for it.";
+
+/// Resolves the destination folder. Choosing the Vault or pCloud top level creates a new,
+/// uniquely named folder, so two jobs never share (and overwrite) the same folder.
 fn resolve_destination(
     s: &Arc<Inner>,
+    kind: JobKind,
     location: TargetLocation,
     folder_id: Option<String>,
     local: &Path,
+    replaces: Option<&str>,
 ) -> AppResult<Option<String>> {
     let name = local
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("Choose a named folder on this computer.")?
         .to_string();
+    let others: Vec<FolderJob> = locked(&s.settings)?
+        .jobs
+        .iter()
+        .filter(|j| j.location == location && Some(j.id.as_str()) != replaces)
+        .cloned()
+        .collect();
+    let in_use = "Another backup or sync already uses that folder or a folder around it. Choose a different folder.";
     match location {
         TargetLocation::Vault => {
             let mut vault = locked(&s.vault)?;
@@ -184,18 +210,35 @@ fn resolve_destination(
                 if entry.kind != vault_core::EntryKind::Folder || entry.trashed {
                     return Err("Choose a Vault folder.".into());
                 }
+                // Refuse the same folder, a folder inside another job's folder, or around it.
+                let ancestors = |start: &str| {
+                    let mut chain = vec![start.to_string()];
+                    let mut current = vault.entry(start).ok().and_then(|e| e.parent_id);
+                    while let Some(parent) = current {
+                        chain.push(parent.clone());
+                        current = vault.entry(&parent).ok().and_then(|e| e.parent_id);
+                    }
+                    chain
+                };
+                let mine = ancestors(id);
+                for other in others.iter().filter_map(|j| j.folder_id.as_deref()) {
+                    if mine.iter().any(|a| a == other) || ancestors(other).contains(id) {
+                        return Err(in_use.into());
+                    }
+                }
+                if kind == JobKind::Backup && !vault.list(Some(id), false).is_empty() {
+                    return Err(BACKUP_NEEDS_EMPTY.into());
+                }
                 return Ok(folder_id);
             }
-            let existing = vault
+            let taken: Vec<String> = vault
                 .list(None, false)
                 .into_iter()
-                .find(|e| e.kind == vault_core::EntryKind::Folder && e.name == name);
-            let folder = match existing {
-                Some(folder) => folder,
-                None => vault
-                    .create_folder(None, &name)
-                    .map_err(|e| e.to_string())?,
-            };
+                .map(|e| e.name)
+                .collect();
+            let folder = vault
+                .create_folder(None, &unique_name(&name, &taken))
+                .map_err(|e| e.to_string())?;
             Ok(Some(folder.id))
         }
         TargetLocation::Cloud => {
@@ -204,29 +247,52 @@ fn resolve_destination(
             if let Some(id) = &folder_id {
                 let number = folders::cloud_folder_id(Some(id))?;
                 if number == 0 {
-                    return resolve_destination(s, location, None, local);
+                    return resolve_destination(s, kind, location, None, local, replaces);
                 }
                 cloud_safe(s, &client, number, true)?;
-                if reserved.is_some_and(|r| {
-                    client
-                        .stat(r, true)
-                        .is_ok_and(|m| m.parent_folder_id == number)
-                }) {
-                    return Err(
-                        "Choose a folder that doesn't contain the Vault's own storage.".into(),
-                    );
+                let ancestors = |start: u64| {
+                    let mut chain = vec![start];
+                    let mut current = start;
+                    for _ in 0..64 {
+                        match client.stat(current, true) {
+                            Ok(m) if m.parent_folder_id != 0 && m.id != 0 => {
+                                current = m.parent_folder_id;
+                                chain.push(current);
+                            }
+                            _ => break,
+                        }
+                    }
+                    chain
+                };
+                let mine = ancestors(number);
+                for other in others.iter() {
+                    let Ok(other) = folders::cloud_folder_id(other.folder_id.as_deref()) else {
+                        continue;
+                    };
+                    if mine.contains(&other) || ancestors(other).contains(&number) {
+                        return Err(in_use.into());
+                    }
+                }
+                if kind == JobKind::Backup
+                    && !client
+                        .list_folder(number)
+                        .map_err(|e| e.to_string())?
+                        .is_empty()
+                {
+                    return Err(BACKUP_NEEDS_EMPTY.into());
                 }
                 return Ok(folder_id);
             }
-            let existing = client
+            let taken: Vec<String> = client
                 .list_folder(0)
                 .map_err(|e| e.to_string())?
                 .into_iter()
-                .find(|m| m.is_folder && m.name == name && Some(m.id) != reserved);
-            let folder = match existing {
-                Some(folder) => folder,
-                None => client.create_folder(0, &name).map_err(|e| e.to_string())?,
-            };
+                .filter(|m| Some(m.id) != reserved)
+                .map(|m| m.name)
+                .collect();
+            let folder = client
+                .create_folder(0, &unique_name(&name, &taken))
+                .map_err(|e| e.to_string())?;
             Ok(Some(format!("d{}", folder.id)))
         }
     }
@@ -265,7 +331,14 @@ pub async fn add_job(
                 return Err("This folder overlaps a folder that is already backed up or synced. Choose a different folder.".into());
             }
         }
-        let folder_id = resolve_destination(&s, location, folder_id, &local)?;
+        let folder_id = resolve_destination(
+            &s,
+            kind,
+            location,
+            folder_id,
+            &local,
+            replaces.as_deref(),
+        )?;
         let job = FolderJob {
             id: folders::new_job_id(),
             kind,
@@ -370,6 +443,9 @@ pub async fn run_job(state: State<'_, AppState>, id: String) -> AppResult<()> {
 #[tauri::command]
 pub async fn resolve_guard(state: State<'_, AppState>, id: String, apply: bool) -> AppResult<()> {
     job(&state.0, &id)?;
+    if locked(&state.0.jobs.running)?.contains(&id) {
+        return Err("This job is running right now. Try again in a moment.".into());
+    }
     spawn_run(
         state.0.clone(),
         id,
@@ -430,9 +506,33 @@ fn run_now(s: &Arc<Inner>, id: &str, mode: RunMode) -> AppResult<()> {
     if job.paused {
         return Ok(());
     }
+    // The protection setting also stops existing jobs that it no longer allows.
+    if let Err(reason) = destination_allowed(s, job.location == TargetLocation::Vault) {
+        set_status(
+            s,
+            id,
+            JobStatus {
+                state: JobState::Error,
+                message: Some(format!("Stopped. {reason}")),
+                pending_deletes: 0,
+                file_count: 0,
+            },
+        );
+        return Ok(());
+    }
     set_status(s, id, JobStatus::new(JobState::Scanning));
     let result = execute(s, &job, mode);
     let status = match &result {
+        Ok(outcome) if !outcome.errors.is_empty() && outcome.pending_deletes == 0 => JobStatus {
+            state: JobState::Error,
+            message: Some(format!(
+                "{} item(s) could not be processed and will be retried. First problem: {}",
+                outcome.errors.len(),
+                outcome.errors[0]
+            )),
+            pending_deletes: 0,
+            file_count: outcome.file_count,
+        },
         Ok(outcome) => JobStatus::from_outcome(outcome),
         Err((state, message)) => JobStatus {
             state: *state,
@@ -453,6 +553,9 @@ fn run_now(s: &Arc<Inner>, id: &str, mode: RunMode) -> AppResult<()> {
         let changed = outcome.uploaded + outcome.downloaded + outcome.trashed + outcome.recycled;
         if changed > 0 || outcome.conflicts > 0 {
             s.log(&summary(&job, outcome), "success");
+        }
+        for error in outcome.errors.iter().take(5) {
+            s.log(&format!("{}: {error}", summary_name(&job)), "error");
         }
         if outcome.pending_deletes > 0 {
             s.log(
@@ -476,6 +579,22 @@ fn run_now(s: &Arc<Inner>, id: &str, mode: RunMode) -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+fn summary_name(job: &FolderJob) -> String {
+    let name = job
+        .local_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!(
+        "{} of {name}",
+        if job.kind == JobKind::Sync {
+            "Sync"
+        } else {
+            "Backup"
+        }
+    )
 }
 
 fn kind_name(job: &FolderJob) -> &'static str {
@@ -520,18 +639,14 @@ fn execute(
     mode: RunMode,
 ) -> Result<RunOutcome, (JobState, String)> {
     let vault_job = job.location == TargetLocation::Vault;
-    let mut trackers: HashMap<String, String> = HashMap::new();
+    let mut trackers: Vec<(String, String)> = Vec::new();
     let mut progress = |p: folders::Progress| {
-        // The engine reports each file as it starts; close the previous one.
-        for (_, tracker) in trackers.drain() {
-            s.transfers.finish(&tracker, &Ok(()));
-        }
         let direction = match p.direction {
             folders::Direction::Upload => Direction::Upload,
             folders::Direction::Download => Direction::Download,
         };
         let tracker = s.transfers.start(&p.name, direction, vault_job, 0);
-        trackers.insert(p.name, tracker);
+        trackers.push((p.name, tracker));
     };
     let recycle = recycle_root(s);
     let result = if vault_job {
@@ -544,17 +659,15 @@ fn execute(
                 "Unlock the Vault to continue.".into(),
             ));
         }
-        // Download missing encrypted chunks for the job folder first, without holding the
-        // vault lock, and keep them from being evicted while the job runs.
-        let _in_use = match &job.folder_id {
-            Some(folder)
-                if job.kind == JobKind::Sync && locked(&s.account).is_ok_and(|a| a.is_some()) =>
-            {
-                crate::replication::ensure_file(s, folder).ok()
-            }
-            _ => None,
+        // Fetch a file's encrypted chunks only when the job needs to read it, without holding
+        // the vault lock, and keep them from being evicted until the run ends.
+        let guards = std::cell::RefCell::new(Vec::new());
+        let ensure = |id: &str| -> Result<(), String> {
+            guards
+                .borrow_mut()
+                .push(crate::replication::ensure_file(s, id)?);
+            Ok(())
         };
-        let ensure = |_: &str| Ok(());
         let mut target = VaultTarget::new(&s.vault, job.folder_id.clone(), &ensure);
         let store = VaultIndexStore { vault: &s.vault };
         set_status(s, &job.id, JobStatus::new(JobState::Transferring));
@@ -606,9 +719,20 @@ fn execute(
             ),
         }
     };
-    for (_, tracker) in trackers.drain() {
-        s.transfers
-            .finish(&tracker, &result.as_ref().map(|_| ()).map_err(Clone::clone));
+    // Per-file errors start with the file's relative path.
+    for (name, tracker) in trackers {
+        let outcome = match &result {
+            Ok(outcome) => match outcome
+                .errors
+                .iter()
+                .find(|e| e.starts_with(&format!("{name}:")) || e.starts_with(&name))
+            {
+                Some(error) => Err(error.clone()),
+                None => Ok(()),
+            },
+            Err(error) => Err(error.clone()),
+        };
+        s.transfers.finish(&tracker, &outcome);
     }
     result.map_err(|error| {
         if error == folders::LOCAL_FOLDER_UNAVAILABLE {
@@ -657,6 +781,10 @@ pub(crate) fn tick(s: &Arc<Inner>, app: &tauri::AppHandle) {
         }
     }
     let _ = folders::purge_recycle(&recycle_root(s), now());
+    // Leftover comparison copies from an interrupted backup run; never kept.
+    if locked(&s.jobs.running).is_ok_and(|r| r.is_empty()) {
+        let _ = std::fs::remove_dir_all(recycle_root(s).join(".verify"));
+    }
 }
 
 #[cfg(test)]
@@ -691,7 +819,9 @@ mod tests {
         let local = directory.path().join("Documents");
         fs::create_dir_all(local.join("Letters")).unwrap();
         fs::write(local.join("Letters/hello.txt"), b"private-sync-marker").unwrap();
-        let folder = resolve_destination(&s, TargetLocation::Vault, None, &local).unwrap();
+        let folder =
+            resolve_destination(&s, JobKind::Sync, TargetLocation::Vault, None, &local, None)
+                .unwrap();
         let job = FolderJob {
             id: folders::new_job_id(),
             kind: JobKind::Sync,
@@ -753,6 +883,117 @@ mod tests {
         *s.vault.lock().unwrap() = None;
         run_now(&s, &job.id, RunMode::Normal).unwrap();
         assert_eq!(view(&s, &job).state, JobState::WaitingForVault);
+    }
+
+    #[test]
+    fn new_jobs_never_share_a_destination_folder() {
+        let (directory, s) = inner();
+        assert_eq!(
+            unique_name("Docs", &["docs".into(), "Docs (2)".into()]),
+            "Docs (3)"
+        );
+        let first = directory.path().join("a").join("Docs");
+        let second = directory.path().join("b").join("Docs");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let one = resolve_destination(
+            &s,
+            JobKind::Backup,
+            TargetLocation::Vault,
+            None,
+            &first,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let two = resolve_destination(
+            &s,
+            JobKind::Backup,
+            TargetLocation::Vault,
+            None,
+            &second,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(one, two, "same-named folders get separate destinations");
+        s.settings.lock().unwrap().jobs.push(FolderJob {
+            id: folders::new_job_id(),
+            kind: JobKind::Backup,
+            local_path: first.clone(),
+            location: TargetLocation::Vault,
+            folder_id: Some(one.clone()),
+            paused: false,
+            mirror_deletions: false,
+            last_run: None,
+        });
+        // Explicitly picking a folder another job uses, or a non-empty one for a backup, fails.
+        assert!(resolve_destination(
+            &s,
+            JobKind::Sync,
+            TargetLocation::Vault,
+            Some(one.clone()),
+            &second,
+            None
+        )
+        .is_err());
+        let busy = {
+            let mut vault = s.vault.lock().unwrap();
+            let vault = vault.as_mut().unwrap();
+            let folder = vault.create_folder(None, "Busy").unwrap();
+            vault
+                .import_file(
+                    Some(&folder.id),
+                    "x.txt",
+                    std::io::Cursor::new(b"x".to_vec()),
+                )
+                .unwrap();
+            folder.id
+        };
+        assert!(resolve_destination(
+            &s,
+            JobKind::Backup,
+            TargetLocation::Vault,
+            Some(busy.clone()),
+            &second,
+            None
+        )
+        .is_err());
+        assert!(resolve_destination(
+            &s,
+            JobKind::Sync,
+            TargetLocation::Vault,
+            Some(busy),
+            &second,
+            None
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn protection_setting_stops_jobs_it_no_longer_allows() {
+        let (directory, s) = inner();
+        let local = directory.path().join("Music");
+        fs::create_dir_all(&local).unwrap();
+        let job = FolderJob {
+            id: folders::new_job_id(),
+            kind: JobKind::Backup,
+            local_path: local,
+            location: TargetLocation::Cloud,
+            folder_id: Some("d5".into()),
+            paused: false,
+            mirror_deletions: false,
+            last_run: None,
+        };
+        {
+            let mut settings = s.settings.lock().unwrap();
+            settings.jobs.push(job.clone());
+            settings.protection = Some("everything".into());
+        }
+        run_now(&s, &job.id, RunMode::Normal).unwrap();
+        let view = view(&s, &job);
+        assert_eq!(view.state, JobState::Error);
+        assert!(view.message.unwrap().starts_with("Stopped."));
     }
 
     fn walk(path: &Path) -> Vec<PathBuf> {
