@@ -745,6 +745,45 @@ mod tests {
         history.remove_last(&ids[6]);
         assert!(!history.is_ancestor(&ids[0], &ids[6]));
     }
+
+    #[test]
+    fn ancestry_matches_full_ancestor_sets_on_random_dags() {
+        for seed in 1..=400_u64 {
+            let mut random = Random(seed.wrapping_mul(0x2545_f491_4f6c_dd1d) | 1);
+            let mut history = History::default();
+            let mut closure: Vec<(String, BTreeSet<String>)> = Vec::new();
+            for n in 0..1 + (seed as usize % 80) {
+                let id = format!("{n:032x}");
+                let mut parents = Vec::new();
+                if !closure.is_empty() {
+                    for _ in 0..random.below(4) {
+                        parents.push(closure[random.below(closure.len())].0.clone());
+                    }
+                }
+                let mut ancestors = BTreeSet::new();
+                for parent in &parents {
+                    ancestors.insert(parent.clone());
+                    let (_, above) = closure.iter().find(|(id, _)| id == parent).unwrap();
+                    ancestors.extend(above.iter().cloned());
+                }
+                history.insert(&id, &parents);
+                if random.below(5) == 0 {
+                    history.remove_last(&id);
+                    continue;
+                }
+                closure.push((id, ancestors));
+            }
+            for (descendant, ancestors) in &closure {
+                for (candidate, _) in &closure {
+                    assert_eq!(
+                        history.is_ancestor(candidate, descendant),
+                        ancestors.contains(candidate),
+                        "seed {seed}: is {candidate} an ancestor of {descendant}?"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

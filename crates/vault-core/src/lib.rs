@@ -1102,11 +1102,23 @@ impl Vault {
         };
         self.store.put_metadata("commit", &id, &commit)?;
         self.local.pending.insert(id.clone());
-        self.save_local()?;
         // Only this commit is new, so reduce the commits already in memory instead of
         // reading and decrypting the whole history from disk again.
-        if self.admissible(&commit)? {
-            self.admitted.insert(id, commit);
+        let integrated = match self.save_local() {
+            Ok(()) => self.admissible(&commit),
+            Err(error) => Err(error),
+        };
+        match integrated {
+            Ok(true) => {
+                self.admitted.insert(id, commit);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                // The commit is stored already: reread the disk so later commits keep it
+                // as a parent instead of becoming concurrent with it.
+                let _ = self.rebuild();
+                return Err(error);
+            }
         }
         self.reduce_admitted()
     }
