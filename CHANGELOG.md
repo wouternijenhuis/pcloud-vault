@@ -2,6 +2,19 @@
 
 All notable changes to pCloud Vault are listed here. The project follows [Semantic Versioning](https://semver.org/). A release is published automatically when a merge to `main` carries a new version in `src-tauri/tauri.conf.json`.
 
+## [0.3.1]
+
+A maintenance release: every library is on its latest version, with no change to how your files are stored.
+
+- **Up-to-date foundations:** Tauri 2.12, React 19 and the newest Rust cryptography, networking and keyring libraries.
+- **Security fixes from libraries:** includes the fixes for RUSTSEC-2026-0592 (`url`) and RUSTSEC-2026-0594 (`cookie`).
+- **Secure connections use your system's certificate store** to verify pCloud's servers.
+- **Linux:** the keyring connection uses a pure-Rust Secret Service client. If the keyring was not running when pCloud Vault started, start it and then restart the app to remember this computer.
+- **Large vaults stay fast:** importing, backing up or syncing thousands of files no longer slows down with every file. Importing 2,000 files is about 3.5 times faster, and much larger vaults open in a fraction of a second.
+- **Safer sharing:** links, shared folders and file requests refuse your whole pCloud (the top folder), since it holds the encrypted vault.
+- **Recovery key file is private:** on macOS and Linux an exported recovery key can now only be read by your own user account.
+- **Vault format guarded by tests:** new known-answer tests and a sample vault check that every future update keeps opening existing vaults.
+
 ## [0.3.0]
 
 pCloud Vault now offers the sections of a full pCloud client, with encryption wherever you want it.
