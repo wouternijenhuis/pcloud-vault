@@ -63,7 +63,7 @@ pub enum Error {
     InvalidLogin,
     #[error("This computer could not protect or unlock its saved secret. Use the vault password and connect pCloud again if needed.")]
     DeviceProtection,
-    #[error("The system keyring is unavailable or access was denied, so this computer cannot save secrets. Allow access in the Keychain prompt on macOS, or run a Secret Service such as GNOME Keyring or KWallet on Linux.")]
+    #[error("The system keyring is unavailable or access was denied, so this computer cannot save secrets. Allow access in the Keychain prompt on macOS, or on Linux start a Secret Service such as GNOME Keyring or KWallet and then restart pCloud Vault.")]
     KeyringUnavailable,
 }
 
