@@ -228,6 +228,13 @@ mod tests {
         assert!(seal(&key, b"").is_err());
     }
 
+    /// A record sealed by an earlier release must keep opening after dependency upgrades.
+    #[test]
+    fn records_sealed_by_earlier_releases_still_open() {
+        let record = hex::decode("01d0667ead2dafd0702b5ac37778b06da763d7d05310234929c75b16b0ffb43e98c4b7d7313d9e118874164f9c479a6566dcb1961c855640109d85dacf7b00aeb79d").unwrap();
+        assert_eq!(open(&[7u8; 32], &record).unwrap(), SECRET);
+    }
+
     #[cfg(windows)]
     #[test]
     fn current_user_roundtrip_and_tamper_rejection() {

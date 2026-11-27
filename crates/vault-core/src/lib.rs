@@ -1196,4 +1196,6 @@ fn now_ms() -> u64 {
 }
 
 #[cfg(test)]
+mod format_tests;
+#[cfg(test)]
 mod tests;

@@ -436,7 +436,7 @@ fn add_location_conflict(
     );
 }
 
-fn derived_id(id: &str, domain: &str, revision: &str) -> String {
+pub(crate) fn derived_id(id: &str, domain: &str, revision: &str) -> String {
     hex::encode(&Sha256::digest(format!("pcloud-vault/{domain}/{id}/{revision}").as_bytes())[..16])
 }
 

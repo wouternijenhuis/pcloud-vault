@@ -147,7 +147,7 @@ impl VaultHeader {
     }
 }
 
-fn derive_password(password: &str, header: &VaultHeader) -> Result<Zeroizing<[u8; 32]>> {
+pub(crate) fn derive_password(password: &str, header: &VaultHeader) -> Result<Zeroizing<[u8; 32]>> {
     header.kdf.validate()?;
     let params = Params::new(
         header.kdf.memory_kib,
