@@ -641,7 +641,8 @@ impl Vault {
         Self::from_key(root, key)
     }
     pub fn export_recovery(&self, destination: &Path) -> Result<()> {
-        write_new(destination, self.recovery_key().as_bytes())
+        let key = Zeroizing::new(self.recovery_key());
+        store::write_private_new(destination, key.as_bytes())
     }
 
     pub fn object_ids(&self) -> Vec<(String, String)> {
