@@ -2,3 +2,4 @@
 *.png binary
 *.ico binary
 
+crates/vault-core/tests/fixtures/** binary

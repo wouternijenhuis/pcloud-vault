@@ -9,5 +9,5 @@
     "check": "pnpm --dir frontend test && pnpm --dir frontend build",
     "preview": "pnpm --dir frontend dev --host 127.0.0.1"
   },
-  "devDependencies": { "@tauri-apps/cli": "^2.9.0" }
+  "devDependencies": { "@tauri-apps/cli": "^2.12.6" }
 }

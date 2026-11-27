@@ -1,0 +1,12 @@
+{
+  "formatVersion": 1,
+  "vaultId": "e510e41f23239637e8cd2f2f7468eeed",
+  "kdf": {
+    "memoryKib": 8192,
+    "iterations": 3,
+    "lanes": 1
+  },
+  "salt": "686328a255080026e941075b186a6972",
+  "wrappedKey": "951217df1bee0324fcd2cd2d1c234cbd001779b04f5ebc3240fa897b5095c04dc54fd74029fb0bb9f573b4fc7811224a283d0721b2d101cd9d2ab6bd3cfd1176cbe9c3e9189c3788",
+  "keyCheck": "b9afebcda41a62a402d285a59690a607d8e0926127c2f0443bd3db0f5197b296ce6e1bd6005784d66bc4453639fdbf96f51eea71e97a4262"
+}
