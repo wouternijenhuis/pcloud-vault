@@ -2,6 +2,8 @@ mod crypto;
 mod model;
 mod store;
 mod sync;
+#[cfg(test)]
+mod sync_reference;
 
 use crypto::{decode_fixed, derive_key, new_id, open, random, seal, valid_id};
 pub use crypto::{KdfParams, VaultHeader, CHUNK_SIZE, FORMAT_VERSION};
@@ -53,6 +55,9 @@ pub struct Vault {
     local: LocalState,
     store: ObjectStore,
     entries: Resolved,
+    /// Every authenticated commit whose content is present, accepted or not.
+    admitted: BTreeMap<String, Commit>,
+    /// The admitted commits the reducer accepted.
     commits: BTreeMap<String, Commit>,
     heads: Vec<String>,
     _process_lock: File,
@@ -142,6 +147,7 @@ impl Vault {
             local,
             store,
             entries: Resolved::new(),
+            admitted: BTreeMap::new(),
             commits: BTreeMap::new(),
             heads: Vec::new(),
             _process_lock: process_lock,
@@ -557,7 +563,7 @@ impl Vault {
             self.local.favorites.remove(id);
         }
         self.save_local()?;
-        self.rebuild()
+        self.reduce_admitted()
     }
     pub fn set_pinned(&mut self, id: &str, value: bool) -> Result<()> {
         self.entry(id)?;
@@ -567,7 +573,7 @@ impl Vault {
             self.local.pinned.remove(id);
         }
         self.save_local()?;
-        self.rebuild()
+        self.reduce_admitted()
     }
 
     pub fn export_file(&self, id: &str, destination: &Path) -> Result<()> {
@@ -730,7 +736,7 @@ impl Vault {
             }
         }
         self.save_local()?;
-        self.rebuild()
+        self.reduce_admitted()
     }
     pub fn ingest_objects(&mut self, objects: Vec<ReplicationObject>) -> Result<()> {
         // An incoming causal successor may replace a currently visible register value.
@@ -1095,9 +1101,14 @@ impl Vault {
             operation,
         };
         self.store.put_metadata("commit", &id, &commit)?;
-        self.local.pending.insert(id);
+        self.local.pending.insert(id.clone());
         self.save_local()?;
-        self.rebuild()
+        // Only this commit is new, so reduce the commits already in memory instead of
+        // reading and decrypting the whole history from disk again.
+        if self.admissible(&commit)? {
+            self.admitted.insert(id, commit);
+        }
+        self.reduce_admitted()
     }
     fn save_local(&self) -> Result<()> {
         let plaintext = Zeroizing::new(serde_json::to_vec(&self.local)?);
@@ -1105,31 +1116,43 @@ impl Vault {
         let ciphertext = seal(&checkpoint_key, &plaintext, self.vault_id().as_bytes())?;
         write_atomic(&self.root.join("local.bin"), &ciphertext)
     }
+    /// Reads and authenticates every commit from disk, then reduces them. Needed after objects
+    /// arrive from elsewhere; local changes use [`Vault::reduce_admitted`].
     fn rebuild(&mut self) -> Result<()> {
-        let mut all = BTreeMap::new();
+        let mut admitted = BTreeMap::new();
         for (id, kind) in &self.store.kinds {
             if kind != "commit" {
                 continue;
             }
             let commit: Commit = self.store.metadata("commit", id)?;
-            if let Some(manifest_id) = commit.operation.manifest_id() {
-                if !self.has_object(manifest_id) {
-                    continue;
-                }
-                let manifest: Manifest = self.store.metadata("manifest", manifest_id)?;
-                let expected_size = match &commit.operation {
-                    Operation::Create { size, .. } | Operation::Write { size, .. } => *size,
-                    _ => 0,
-                };
-                // Authenticated but semantically invalid content is quarantined (with its
-                // descendants) so it cannot make the vault unreadable on every PC.
-                if self.validate_manifest(&manifest).is_err() || manifest.size != expected_size {
-                    continue;
-                }
+            if self.admissible(&commit)? {
+                admitted.insert(id.clone(), commit);
             }
-            all.insert(id.clone(), commit);
         }
-        let reduction = sync::reduce(&all, &self.local)?;
+        self.admitted = admitted;
+        self.reduce_admitted()
+    }
+
+    /// Whether a commit's content is present and valid. Authenticated but semantically
+    /// invalid content is quarantined (with its descendants) so it cannot make the vault
+    /// unreadable on every PC.
+    fn admissible(&self, commit: &Commit) -> Result<bool> {
+        let Some(manifest_id) = commit.operation.manifest_id() else {
+            return Ok(true);
+        };
+        if !self.has_object(manifest_id) {
+            return Ok(false);
+        }
+        let manifest: Manifest = self.store.metadata("manifest", manifest_id)?;
+        let expected_size = match &commit.operation {
+            Operation::Create { size, .. } | Operation::Write { size, .. } => *size,
+            _ => 0,
+        };
+        Ok(self.validate_manifest(&manifest).is_ok() && manifest.size == expected_size)
+    }
+
+    fn reduce_admitted(&mut self) -> Result<()> {
+        let reduction = sync::reduce(&self.admitted, &self.local)?;
         if self
             .local
             .known_commits
@@ -1140,9 +1163,11 @@ impl Vault {
         }
         self.entries = reduction.entries;
         self.heads = reduction.heads;
-        self.commits = all
-            .into_iter()
-            .filter(|(id, _)| reduction.accepted.contains(id))
+        self.commits = self
+            .admitted
+            .iter()
+            .filter(|(id, _)| reduction.accepted.contains(*id))
+            .map(|(id, commit)| (id.clone(), commit.clone()))
             .collect();
         Ok(())
     }

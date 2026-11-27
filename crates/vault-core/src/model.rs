@@ -118,9 +118,21 @@ impl Operation {
             _ => None,
         }
     }
+    /// The entries this operation changes: its own, and a file a relocation replaces.
+    pub(crate) fn affected_entries(&self) -> impl Iterator<Item = &str> {
+        let displaced = match self {
+            Self::Relocate {
+                displaced: Some(target),
+                ..
+            } => Some(target.as_str()),
+            _ => None,
+        };
+        std::iter::once(self.entry_id()).chain(displaced)
+    }
+
+    #[cfg(test)]
     pub(crate) fn affects_entry(&self, id: &str) -> bool {
-        self.entry_id() == id
-            || matches!(self, Self::Relocate { displaced: Some(target), .. } if target == id)
+        self.affected_entries().any(|entry| entry == id)
     }
 }
 

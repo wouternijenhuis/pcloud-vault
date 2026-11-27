@@ -875,3 +875,29 @@ fn replace_file_creates_a_new_version_and_side_data_roundtrips() {
     vault.remove_local_blob("sync-index").unwrap();
     assert!(vault.load_local_blob("sync-index").unwrap().is_none());
 }
+
+/// Measures how importing many files scales: `cargo test --release -p vault-core
+/// history_scaling -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing measurement"]
+fn history_scaling_measurement() {
+    for count in [500_usize, 1000, 2000] {
+        let (directory, mut vault) = fixture();
+        let started = std::time::Instant::now();
+        for index in 0..count {
+            vault
+                .import_file(None, &format!("file {index}.txt"), Cursor::new(b"x"))
+                .unwrap();
+        }
+        let imported = started.elapsed();
+        drop(vault);
+        let started = std::time::Instant::now();
+        let vault = Vault::open(directory.path(), "long test passphrase").unwrap();
+        println!(
+            "{count} files: import {:?}, reopen {:?}, entries {}",
+            imported,
+            started.elapsed(),
+            vault.all_entries().len()
+        );
+    }
+}
