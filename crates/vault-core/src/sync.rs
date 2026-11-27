@@ -6,7 +6,125 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-type History = BTreeMap<String, BTreeSet<String>>;
+/// Causal order of the accepted commits.
+///
+/// Commits are grouped into linear segments: every commit after the first one of a segment
+/// has exactly one parent, the commit before it. The ancestors of a commit are therefore the
+/// earlier commits of its segment plus the first commit's parents and their ancestors, so an
+/// ancestry check walks segments instead of storing every commit's full ancestor set.
+/// Generations (one more than the highest parent) prune walks that cannot reach the target.
+#[derive(Default)]
+struct History {
+    positions: BTreeMap<String, Position>,
+    segments: Vec<Segment>,
+}
+
+#[derive(Clone, Copy)]
+struct Position {
+    segment: usize,
+    index: usize,
+    generation: u64,
+}
+
+struct Segment {
+    parents: Vec<String>,
+    first_generation: u64,
+    len: usize,
+}
+
+impl History {
+    /// Adds a commit whose parents are all accepted already.
+    fn insert(&mut self, id: &str, parents: &[String]) {
+        let parents: BTreeSet<&String> = parents.iter().collect();
+        let generation = 1 + parents
+            .iter()
+            .map(|parent| self.positions[parent.as_str()].generation)
+            .max()
+            .unwrap_or(0);
+        let extends = match parents.iter().next() {
+            Some(parent) if parents.len() == 1 => {
+                let position = self.positions[parent.as_str()];
+                (position.index + 1 == self.segments[position.segment].len)
+                    .then_some(position.segment)
+            }
+            _ => None,
+        };
+        let position = match extends {
+            Some(segment) => {
+                self.segments[segment].len += 1;
+                Position {
+                    segment,
+                    index: self.segments[segment].len - 1,
+                    generation,
+                }
+            }
+            None => {
+                self.segments.push(Segment {
+                    parents: parents.into_iter().cloned().collect(),
+                    first_generation: generation,
+                    len: 1,
+                });
+                Position {
+                    segment: self.segments.len() - 1,
+                    index: 0,
+                    generation,
+                }
+            }
+        };
+        self.positions.insert(id.to_string(), position);
+    }
+
+    /// Takes back the most recent [`History::insert`], for a commit that could not be applied.
+    fn remove_last(&mut self, id: &str) {
+        let position = self
+            .positions
+            .remove(id)
+            .expect("the removed commit was inserted last");
+        if position.index == 0 {
+            self.segments.pop();
+        } else {
+            self.segments[position.segment].len -= 1;
+        }
+    }
+
+    /// Whether `ancestor` is a strict ancestor of `descendant`.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
+        let (Some(target), Some(start)) =
+            (self.positions.get(ancestor), self.positions.get(descendant))
+        else {
+            return false;
+        };
+        // Each item stands for a segment's commits before `limit` and all of their ancestors.
+        let mut pending = vec![(start.segment, start.index)];
+        let mut explored: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut parents_queued: BTreeSet<usize> = BTreeSet::new();
+        while let Some((segment, limit)) = pending.pop() {
+            if explored
+                .get(&segment)
+                .is_some_and(|&previous| previous >= limit)
+            {
+                continue;
+            }
+            explored.insert(segment, limit);
+            if target.segment == segment && target.index < limit {
+                return true;
+            }
+            // Everything before a segment has a lower generation than its first commit.
+            let data = &self.segments[segment];
+            if target.generation < data.first_generation && parents_queued.insert(segment) {
+                for parent in &data.parents {
+                    let position = self.positions[parent.as_str()];
+                    pending.push((position.segment, position.index + 1));
+                }
+            }
+        }
+        false
+    }
+
+    fn into_accepted(self) -> BTreeSet<String> {
+        self.positions.into_keys().collect()
+    }
+}
 
 #[derive(Debug, Clone)]
 struct Register<T> {
@@ -20,7 +138,7 @@ impl<T: Clone> Register<T> {
     }
     fn set(&mut self, id: &str, value: T, history: &History) {
         self.values
-            .retain(|(previous, _)| !history[id].contains(previous));
+            .retain(|(previous, _)| !history.is_ancestor(previous, id));
         self.values.push((id.into(), value));
         self.values.sort_by(|a, b| a.0.cmp(&b.0));
     }
@@ -46,54 +164,64 @@ pub(crate) struct Reduction {
 }
 
 pub(crate) fn reduce(commits: &BTreeMap<String, Commit>, local: &LocalState) -> Result<Reduction> {
-    let mut remaining = commits.clone();
-    let mut history: History = BTreeMap::new();
+    let mut history = History::default();
     let mut records: BTreeMap<String, Raw> = BTreeMap::new();
     let mut heads = BTreeSet::new();
-    loop {
-        let ready: Vec<String> = remaining
-            .iter()
-            .filter(|(_, commit)| {
-                commit
-                    .parents
-                    .iter()
-                    .all(|parent| history.contains_key(parent))
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        if ready.is_empty() {
-            break;
+    // Commits are applied in rounds: each round takes, in id order, every commit whose
+    // parents were all accepted in earlier rounds.
+    let mut waiting: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut ready: BTreeSet<&str> = BTreeSet::new();
+    for (id, commit) in commits {
+        let parents: BTreeSet<&str> = commit.parents.iter().map(String::as_str).collect();
+        if parents.is_empty() {
+            ready.insert(id);
+            continue;
         }
+        waiting.insert(id, parents.len());
+        for parent in parents {
+            children.entry(parent).or_default().push(id);
+        }
+    }
+    while !ready.is_empty() {
+        let mut next = BTreeSet::new();
         for id in ready {
-            let commit = remaining.remove(&id).expect("ready commit exists");
+            let commit = &commits[id];
             if commit.id != id
-                || !valid_id(&id)
+                || !valid_id(id)
                 || !valid_id(&commit.device_id)
                 || commit.parents.len() > 4096
             {
                 // Quarantined: it never enters history, so its descendants stay unresolved too.
                 continue;
             }
-            let mut ancestors = BTreeSet::new();
-            for parent in &commit.parents {
-                ancestors.insert(parent.clone());
-                ancestors.extend(history[parent].iter().cloned());
-            }
-            history.insert(id.clone(), ancestors);
+            history.insert(id, &commit.parents);
             // A semantically invalid commit (from a buggy or incompatible client) is skipped
             // deterministically instead of making the whole vault unreadable on every PC.
-            let applied = apply_commit(&id, &commit, &history, &mut records);
-            if applied.is_err() {
-                history.remove(&id);
+            if apply_commit(id, commit, &history, &mut records).is_err() {
+                history.remove_last(id);
                 continue;
             }
             for parent in &commit.parents {
                 heads.remove(parent);
             }
-            heads.insert(id.clone());
+            heads.insert(id.to_string());
+            for child in children.get(id).into_iter().flatten() {
+                let missing = waiting.get_mut(child).expect("child waits for parents");
+                *missing -= 1;
+                if *missing == 0 {
+                    next.insert(*child);
+                }
+            }
         }
+        ready = next;
     }
-    resolve(commits, local, history, records, heads)
+    let pending_entries: BTreeSet<&str> = commits
+        .values()
+        .filter(|commit| local.pending.contains(&commit.id))
+        .flat_map(|commit| commit.operation.affected_entries())
+        .collect();
+    resolve(&pending_entries, local, history, records, heads)
 }
 
 fn apply_commit(
@@ -226,7 +354,7 @@ fn apply_commit(
 }
 
 fn resolve(
-    commits: &BTreeMap<String, Commit>,
+    pending_entries: &BTreeSet<&str>,
     local: &LocalState,
     history: History,
     records: BTreeMap<String, Raw>,
@@ -240,7 +368,7 @@ fn resolve(
                 .live
                 .values
                 .iter()
-                .all(|(live_id, _)| history[trash_id].contains(live_id));
+                .all(|(live_id, _)| history.is_ancestor(live_id, trash_id));
         let (content_commit, (manifest, size)) = record.contents.winner();
         let base = Entry {
             id: id.clone(),
@@ -252,9 +380,7 @@ fn resolve(
             starred: local.favorites.contains(id),
             pinned: local.pinned.contains(id),
             trashed,
-            sync_state: if commits.values().any(|commit| {
-                commit.operation.affects_entry(id) && local.pending.contains(&commit.id)
-            }) {
+            sync_state: if pending_entries.contains(id.as_str()) {
                 "local".into()
             } else {
                 "synced".into()
@@ -402,7 +528,7 @@ fn resolve(
     Ok(Reduction {
         entries,
         heads: heads.into_iter().collect(),
-        accepted: history.into_keys().collect(),
+        accepted: history.into_accepted(),
     })
 }
 
@@ -456,4 +582,267 @@ fn conflict_name(name: &str, suffix: &str) -> String {
         })
         .collect();
     format!("{prefix} ({suffix})")
+}
+
+#[cfg(test)]
+pub(crate) fn conflict_name_for_reference(name: &str, suffix: &str) -> String {
+    conflict_name(name, suffix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::EntryKind;
+
+    /// Small deterministic generator, so a failing history can be replayed from its seed.
+    struct Random(u64);
+    impl Random {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, bound: usize) -> usize {
+            (self.next() % bound as u64) as usize
+        }
+    }
+
+    fn hex_id(random: &mut Random) -> String {
+        format!("{:016x}{:016x}", random.next(), random.next())
+    }
+
+    fn random_history(seed: u64, size: usize) -> (BTreeMap<String, Commit>, LocalState) {
+        let mut random = Random(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        let devices: Vec<String> = (0..3).map(|_| hex_id(&mut random)).collect();
+        let entries: Vec<String> = (0..6).map(|_| hex_id(&mut random)).collect();
+        let names = ["a.txt", "A.TXT", "b", "Folder", "notes.md", "x"];
+        let mut ids: Vec<String> = Vec::new();
+        let mut commits = BTreeMap::new();
+        for _ in 0..size {
+            let id = hex_id(&mut random);
+            let mut parents = Vec::new();
+            if !ids.is_empty() && random.below(10) != 0 {
+                for _ in 0..1 + random.below(3) {
+                    // Mostly recent commits, so histories form long chains with some forks.
+                    let back = if random.below(4) == 0 {
+                        random.below(ids.len())
+                    } else {
+                        random.below(ids.len().min(3))
+                    };
+                    parents.push(ids[ids.len() - 1 - back].clone());
+                }
+            }
+            if random.below(40) == 0 {
+                parents.push(hex_id(&mut random)); // a parent that never arrives
+            }
+            let entry = entries[random.below(entries.len())].clone();
+            let other = entries[random.below(entries.len())].clone();
+            let name = names[random.below(names.len())].to_string();
+            let parent = (random.below(3) != 0).then(|| other.clone());
+            let manifest = format!("{:032x}", random.below(4));
+            let size = random.below(3) as u64;
+            let operation = match random.below(7) {
+                0 | 1 => Operation::Create {
+                    id: entry,
+                    parent,
+                    name,
+                    kind: if random.below(3) == 0 {
+                        EntryKind::Folder
+                    } else {
+                        EntryKind::File
+                    },
+                    manifest: Some(manifest),
+                    size,
+                },
+                2 => Operation::Write {
+                    id: entry,
+                    manifest,
+                    size,
+                },
+                3 => Operation::Rename { id: entry, name },
+                4 => Operation::Move { id: entry, parent },
+                5 => Operation::Relocate {
+                    id: entry,
+                    parent,
+                    name,
+                    displaced: (random.below(2) == 0).then_some(other),
+                },
+                _ => Operation::Trash {
+                    id: entry,
+                    trashed: random.below(3) != 0,
+                },
+            };
+            let commit = Commit {
+                id: if random.below(60) == 0 {
+                    "not-a-valid-id".into()
+                } else {
+                    id.clone()
+                },
+                parents,
+                device_id: devices[random.below(devices.len())].clone(),
+                modified: random.below(1000) as u64,
+                operation,
+            };
+            ids.push(id.clone());
+            commits.insert(id, commit);
+        }
+        let local = LocalState {
+            device_id: devices[0].clone(),
+            pending: ids
+                .iter()
+                .filter(|_| random.below(5) == 0)
+                .cloned()
+                .collect(),
+            favorites: entries.iter().take(1).cloned().collect(),
+            pinned: entries.iter().skip(1).take(1).cloned().collect(),
+            cache_limit_bytes: 0,
+            known_commits: BTreeSet::new(),
+        };
+        (commits, local)
+    }
+
+    #[test]
+    fn reducer_matches_the_previous_implementation_on_random_histories() {
+        for seed in 1..=3000_u64 {
+            let size = 1 + (seed as usize % 60);
+            let (commits, local) = random_history(seed, size);
+            let current = reduce(&commits, &local).unwrap();
+            let reference = crate::sync_reference::reduce(&commits, &local).unwrap();
+            assert_eq!(
+                current.heads, reference.heads,
+                "heads differ for seed {seed}"
+            );
+            assert_eq!(
+                current.accepted, reference.accepted,
+                "accepted commits differ for seed {seed}"
+            );
+            assert_eq!(
+                format!("{:?}", current.entries),
+                format!("{:?}", reference.entries),
+                "entries differ for seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn ancestry_follows_forks_and_merges() {
+        let mut history = History::default();
+        let ids: Vec<String> = (0..7).map(|n| format!("{n:032x}")).collect();
+        let parents = |list: &[usize]| list.iter().map(|&n| ids[n].clone()).collect::<Vec<_>>();
+        // 0 - 1 - 2 ----- 5 - 6
+        //      \- 3 - 4 -/
+        history.insert(&ids[0], &[]);
+        history.insert(&ids[1], &parents(&[0]));
+        history.insert(&ids[2], &parents(&[1]));
+        history.insert(&ids[3], &parents(&[1]));
+        history.insert(&ids[4], &parents(&[3]));
+        history.insert(&ids[5], &parents(&[2, 4]));
+        history.insert(&ids[6], &parents(&[5]));
+        let is = |a: usize, b: usize| history.is_ancestor(&ids[a], &ids[b]);
+        assert!(is(0, 6) && is(3, 6) && is(4, 5) && is(1, 4) && is(2, 5));
+        assert!(!is(2, 4) && !is(4, 2) && !is(3, 2) && !is(6, 0) && !is(5, 5));
+        history.remove_last(&ids[6]);
+        assert!(!history.is_ancestor(&ids[0], &ids[6]));
+    }
+
+    #[test]
+    fn ancestry_matches_full_ancestor_sets_on_random_dags() {
+        for seed in 1..=400_u64 {
+            let mut random = Random(seed.wrapping_mul(0x2545_f491_4f6c_dd1d) | 1);
+            let mut history = History::default();
+            let mut closure: Vec<(String, BTreeSet<String>)> = Vec::new();
+            for n in 0..1 + (seed as usize % 80) {
+                let id = format!("{n:032x}");
+                let mut parents = Vec::new();
+                if !closure.is_empty() {
+                    for _ in 0..random.below(4) {
+                        parents.push(closure[random.below(closure.len())].0.clone());
+                    }
+                }
+                let mut ancestors = BTreeSet::new();
+                for parent in &parents {
+                    ancestors.insert(parent.clone());
+                    let (_, above) = closure.iter().find(|(id, _)| id == parent).unwrap();
+                    ancestors.extend(above.iter().cloned());
+                }
+                history.insert(&id, &parents);
+                if random.below(5) == 0 {
+                    history.remove_last(&id);
+                    continue;
+                }
+                closure.push((id, ancestors));
+            }
+            for (descendant, ancestors) in &closure {
+                for (candidate, _) in &closure {
+                    assert_eq!(
+                        history.is_ancestor(candidate, descendant),
+                        ancestors.contains(candidate),
+                        "seed {seed}: is {candidate} an ancestor of {descendant}?"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod measurements {
+    use super::*;
+    use crate::model::EntryKind;
+
+    /// `cargo test --release -p vault-core reduce_scaling -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing measurement"]
+    fn reduce_scaling_measurement() {
+        for count in [10_000_usize, 50_000] {
+            let mut commits = BTreeMap::new();
+            let mut previous: Option<String> = None;
+            for n in 0..count {
+                let id = format!("{:032x}", n as u128 * 0x9e37_79b9_7f4a_7c15 + 1);
+                let entry = format!("{:032x}", n % 2000 + 1);
+                let operation = if n < 2000 {
+                    Operation::Create {
+                        id: entry,
+                        parent: None,
+                        name: format!("file {n}"),
+                        kind: EntryKind::File,
+                        manifest: None,
+                        size: 0,
+                    }
+                } else {
+                    Operation::Rename {
+                        id: entry,
+                        name: format!("renamed {n}"),
+                    }
+                };
+                commits.insert(
+                    id.clone(),
+                    Commit {
+                        id: id.clone(),
+                        parents: previous.iter().cloned().collect(),
+                        device_id: format!("{:032x}", 7),
+                        modified: n as u64,
+                        operation,
+                    },
+                );
+                previous = Some(id);
+            }
+            let local = LocalState {
+                device_id: format!("{:032x}", 7),
+                pending: BTreeSet::new(),
+                favorites: BTreeSet::new(),
+                pinned: BTreeSet::new(),
+                cache_limit_bytes: 0,
+                known_commits: BTreeSet::new(),
+            };
+            let started = std::time::Instant::now();
+            let reduction = reduce(&commits, &local).unwrap();
+            println!(
+                "{count} commits (2000 files, then renames): reduce {:?}, {} accepted",
+                started.elapsed(),
+                reduction.accepted.len()
+            );
+        }
+    }
 }
