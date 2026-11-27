@@ -1,7 +1,7 @@
 {
   "name": "pcloud-vault-desktop",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "packageManager": "pnpm@12.23.0",
   "scripts": {
     "dev": "tauri dev",
