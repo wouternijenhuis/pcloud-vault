@@ -93,6 +93,15 @@ fn password_recovery_and_rewrap_preserve_all_content() {
     assert!(vault.export_file(&file.id, &existing).is_err());
     assert!(vault.export_recovery(&existing).is_err());
     assert_eq!(fs::read(existing).unwrap(), b"keep");
+    let exported = directory.path().join("vault.pcloud-recovery");
+    vault.export_recovery(&exported).unwrap();
+    assert_eq!(fs::read_to_string(&exported).unwrap(), key);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&exported).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "recovery key must be owner-only");
+    }
 }
 
 #[test]

@@ -24,6 +24,7 @@ use tauri::{Manager, State};
 pub const PROTECTIONS: [&str; 3] = ["everything", "choose", "vaultOnly"];
 const THEMES: [&str; 3] = ["system", "light", "dark"];
 const VAULT_SHARE_REFUSAL: &str = "Vault files can't be shared: sharing would let pCloud read them. Export a copy and upload it to pCloud Files to share it.";
+const ROOT_SHARE_REFUSAL: &str = "Your whole pCloud can't be shared, because it holds the encrypted vault. Share a folder inside it instead.";
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -642,11 +643,21 @@ pub(crate) fn format_pcloud_time(ms: u64) -> String {
     )
 }
 
-fn plain_cloud_entry(s: &Inner, client: &Client, id: &str) -> AppResult<(u64, bool)> {
+/// Parses an id for a link, share or file request: only plain pCloud files and folders
+/// below the root qualify. Vault ids and the root folder, which holds the vault, do not.
+fn shareable_cloud_id(id: &str) -> AppResult<(u64, bool)> {
     if !(id.starts_with('f') || id.starts_with('d')) {
         return Err(VAULT_SHARE_REFUSAL.into());
     }
     let (number, folder) = cloud_id(id).map_err(|_| VAULT_SHARE_REFUSAL.to_string())?;
+    if folder && number == 0 {
+        return Err(ROOT_SHARE_REFUSAL.into());
+    }
+    Ok((number, folder))
+}
+
+fn plain_cloud_entry(s: &Inner, client: &Client, id: &str) -> AppResult<(u64, bool)> {
+    let (number, folder) = shareable_cloud_id(id)?;
     cloud_safe(s, client, number, folder)?;
     Ok((number, folder))
 }
@@ -1044,6 +1055,18 @@ pub(crate) fn encrypt_received(s: &Arc<Inner>) -> AppResult<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_shares_and_requests_refuse_vault_ids_and_the_root_folder() {
+        assert_eq!(shareable_cloud_id("d42").unwrap(), (42, true));
+        assert_eq!(shareable_cloud_id("f7").unwrap(), (7, false));
+        assert_eq!(shareable_cloud_id("d0").unwrap_err(), ROOT_SHARE_REFUSAL);
+        assert_eq!(
+            shareable_cloud_id("0123456789abcdef0123456789abcdef").unwrap_err(),
+            VAULT_SHARE_REFUSAL
+        );
+        assert_eq!(shareable_cloud_id("dx").unwrap_err(), VAULT_SHARE_REFUSAL);
+    }
 
     #[test]
     fn only_project_and_pcloud_https_links_open() {

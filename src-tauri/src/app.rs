@@ -1397,15 +1397,7 @@ async fn export_recovery(state: State<'_, AppState>) -> AppResult<()> {
         let vault = guard
             .as_ref()
             .ok_or("Vault was locked before recovery export. Unlock it and try again.")?;
-        let key = Zeroizing::new(vault.recovery_key());
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-            .map_err(|e| e.to_string())?;
-        file.write_all(key.as_bytes())
-            .and_then(|_| file.sync_all())
-            .map_err(|e| e.to_string())?;
+        vault.export_recovery(&path).map_err(|e| e.to_string())?;
         s.log(
             "Recovery key exported. Keep it private and separate from the vault.",
             "success",

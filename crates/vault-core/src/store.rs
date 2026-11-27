@@ -26,6 +26,19 @@ pub(crate) fn read_limited(path: &Path, maximum: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Like [`write_new`], but readable only by the current user on Unix, for secrets such as
+/// the recovery key. (On Windows the file inherits the folder's access list.)
+pub(crate) fn write_private_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
 pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = OpenOptions::new().create_new(true).write(true).open(path)?;
     file.write_all(bytes)?;
