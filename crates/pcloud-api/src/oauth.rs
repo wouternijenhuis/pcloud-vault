@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -199,7 +199,9 @@ fn valid_host(headers: &HeaderMap) -> bool {
 }
 fn random_hex() -> String {
     let mut random = [0u8; 32];
-    OsRng.fill_bytes(&mut random);
+    SysRng
+        .try_fill_bytes(&mut random)
+        .expect("the operating system random generator is available");
     hex::encode(random)
 }
 
