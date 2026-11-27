@@ -34,20 +34,30 @@ pub fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 const SEAL_VERSION: u8 = 1;
+
+#[cfg_attr(windows, allow(dead_code))]
+fn random_bytes<const N: usize>() -> [u8; N] {
+    use rand::TryRng;
+    let mut bytes = [0u8; N];
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("the operating system random generator is available");
+    bytes
+}
 const NONCE_LEN: usize = 24;
 
 /// Sealed record: version byte, random 192-bit nonce, then ciphertext with its tag.
 #[cfg_attr(windows, allow(dead_code))]
 fn seal(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>> {
     use chacha20poly1305::{
-        aead::{Aead, AeadCore, KeyInit, OsRng, Payload},
-        XChaCha20Poly1305,
+        aead::{Aead, KeyInit, Payload},
+        XChaCha20Poly1305, XNonce,
     };
     if data.is_empty() || data.len() > MAX_SECRET_LEN {
         return Err(Error::DeviceProtection);
     }
     let cipher = XChaCha20Poly1305::new(key.into());
-    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let nonce = XNonce::from(random_bytes::<NONCE_LEN>());
     let sealed = cipher
         .encrypt(
             &nonce,
@@ -79,7 +89,7 @@ fn open(key: &[u8; 32], record: &[u8]) -> Result<Vec<u8>> {
     let (nonce, sealed) = record[1..].split_at(NONCE_LEN);
     XChaCha20Poly1305::new(key.into())
         .decrypt(
-            XNonce::from_slice(nonce),
+            &XNonce::try_from(nonce).map_err(|_| Error::DeviceProtection)?,
             Payload {
                 msg: sealed,
                 aad: &[SEAL_VERSION],
@@ -114,7 +124,7 @@ mod keyring_store {
             }
             Err(keyring::Error::NoEntry) if create => {
                 let mut key = Zeroizing::new([0u8; 32]);
-                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key[..]);
+                *key = super::random_bytes::<32>();
                 entry.set_secret(&key[..]).map_err(unavailable)?;
                 // Use what the keyring actually stored, in case another process won.
                 let stored = Zeroizing::new(entry.get_secret().map_err(unavailable)?);
@@ -131,9 +141,9 @@ mod keyring_store {
 
     fn unavailable(error: keyring::Error) -> Error {
         match error {
-            keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => {
-                Error::KeyringUnavailable
-            }
+            keyring::Error::PlatformFailure(_)
+            | keyring::Error::NoStorageAccess(_)
+            | keyring::Error::NoDefaultStore => Error::KeyringUnavailable,
             _ => Error::DeviceProtection,
         }
     }

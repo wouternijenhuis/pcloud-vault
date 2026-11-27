@@ -5,7 +5,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use hkdf::Hkdf;
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -169,7 +169,9 @@ pub(crate) fn derive_password(password: &str, header: &VaultHeader) -> Result<Ze
 
 pub(crate) fn random<const N: usize>() -> [u8; N] {
     let mut bytes = [0_u8; N];
-    OsRng.fill_bytes(&mut bytes);
+    SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("the operating system random generator is available");
     bytes
 }
 
@@ -203,7 +205,7 @@ pub(crate) fn seal(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u
     let nonce = random::<24>();
     let ciphertext = XChaCha20Poly1305::new(key.into())
         .encrypt(
-            XNonce::from_slice(&nonce),
+            &XNonce::from(nonce),
             Payload {
                 msg: plaintext,
                 aad,
@@ -222,7 +224,7 @@ pub(crate) fn open(key: &[u8; 32], envelope: &[u8], aad: &[u8]) -> Result<Vec<u8
     }
     XChaCha20Poly1305::new(key.into())
         .decrypt(
-            XNonce::from_slice(&envelope[..24]),
+            &XNonce::try_from(&envelope[..24]).map_err(|_| Error::Authentication)?,
             Payload {
                 msg: &envelope[24..],
                 aad,
@@ -243,7 +245,7 @@ mod tests {
         let plaintext = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
         let ciphertext = XChaCha20Poly1305::new((&key).into())
             .encrypt(
-                XNonce::from_slice(&nonce),
+                &XNonce::try_from(nonce.as_slice()).unwrap(),
                 Payload {
                     msg: plaintext,
                     aad: &aad,
